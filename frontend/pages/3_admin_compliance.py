@@ -1,5 +1,6 @@
 """
-관리자 컴플라이언스 (Phase 7): 차주 가입 승인 · 감사 로그(FSM 상태 전이 · 재무 변경) · 모의 PG 결제 내역/취소.
+관리자 컴플라이언스 (Phase 7): 차주 가입 승인(사업자 Mod-10 · 노란 번호판 · 서류) · 리뷰 · 블랙리스트 ·
+감사 로그(SHA-256 해시 체인 위변조 검사) · 모의 PG 결제 내역/취소.
 """
 
 import pandas as pd
@@ -10,6 +11,8 @@ import ui
 
 EVENT_TONE = {"create": "gray", "assign": "brand", "start": "blue", "deliver": "teal", "request": "amber",
               "pay": "green", "settle": "green", "refund": "red", "unsettle": "red"}
+DOC_LABEL = {"license": "운전면허증", "cargo_license": "화물운송종사 자격증", "vehicle": "차량등록증 · 번호판"}
+PLATE_LABEL = {"COMMERCIAL_YELLOW": "사업용(노란)", "PRIVATE_WHITE": "자가용(흰색)", "RENTAL": "렌터카", "INVALID": "형식 오류"}
 
 
 def page():
@@ -19,18 +22,25 @@ def page():
     pending = [d for d in drivers if d["status"] == "PENDING"]
     payments = ui.load(api.get, "/admin/payments")
     audit = ui.load(api.get, "/admin/audit", limit=500)
+    rep = ui.load(api.get, "/admin/reputation")
+    blocked = [r for r in rep if r["blacklisted"]]
     ui.kpis([
         {"label": "가입 승인 대기", "value": len(pending), "unit": "명", "alert": bool(pending),
          "note": "승인 전에는 배차를 받을 수 없음"},
-        {"label": "감사 로그", "value": len(audit), "unit": "건", "note": "최근 500건 · 추가만 가능"},
+        {"label": "배차 불가 기사", "value": sum(1 for d in drivers if not d["dispatchable"]), "unit": "명",
+         "note": f"이용 제한 {len(blocked)} · 번호판 부적합 {sum(1 for d in drivers if d['compliance']['plate_type'] != 'COMMERCIAL_YELLOW')}"},
+        {"label": "감사 로그", "value": len(audit), "unit": "건", "note": "최근 500건 · SHA-256 해시 체인"},
         {"label": "재무 변경", "value": sum(1 for e in audit if e["financial"]), "unit": "건",
          "note": "청구 · 결제 · 취소"},
         {"label": "결제 승인 (모의 PG)", "value": ui.won(sum(p["amount"] for p in payments if p["status"] == "APPROVED")),
          "note": f"취소 {sum(1 for p in payments if p['status'] == 'CANCELLED')}건"},
     ])
-    t1, t2, t3 = st.tabs([f"차주 가입 승인 · {len(pending)}", "감사 로그 (Audit Trail)", "결제 내역 · 취소 (모의 PG)"])
+    t1, t4, t2, t3 = st.tabs([f"차주 가입 승인 · {len(pending)}", f"리뷰 · 블랙리스트 · {len(blocked)}",
+                              "감사 로그 (해시 체인)", "결제 내역 · 취소 (모의 PG)"])
     with t1:
         _drivers_tab(drivers)
+    with t4:
+        _reviews_tab(rep)
     with t2:
         _audit_tab(audit)
     with t3:
@@ -45,13 +55,21 @@ def _drivers_tab(drivers: list[dict]):
                 icon=":material/verified_user:")
     for d in pending:
         with st.container(border=True):
-            docs = " · ".join(f"{'운전면허증' if x['kind'] == 'license' else '차량 사진'} {x['filename']} "
+            docs = " · ".join(f"{DOC_LABEL.get(x['kind'], x['kind'])} {x['filename']} "
                               f"({x['size'] / 1024:.0f}KB)" for x in d["documents"]) or "제출 서류 없음"
+            cp, biz = d["compliance"], d.get("biz_check") or {}
+            ton = f"{cp['tonnage']:g}톤"
+            checks = (f'{ui.pill(PLATE_LABEL.get(cp["plate_type"], cp["plate_type"]), "green" if cp["plate_type"] == "COMMERCIAL_YELLOW" else "red")} '
+                      f'{ui.pill("사업자 " + biz.get("label", "-"), "green" if biz.get("ok") else "red")} '
+                      f'{ui.pill(ton, "gray")}')
             ui.html(f'<div class="ct-row"><div><div class="ct-strong" style="font-size:16px">{d["name"]} · '
                     f'{d["truck_type"]} · {d["plate"]}</div><div class="ct-muted">{d["id"]} · {d["email"] or "-"} · '
-                    f'{d["phone"] or "-"} · 대기 지역 {d["location"]} · 사업자 {d.get("biz_no") or "-"}</div>'
-                    f'<div class="ct-muted" style="margin-top:6px">제출 서류: {docs}</div></div>'
-                    f'<div>{ui.pill("승인 대기", "amber")}</div></div>')
+                    f'{d["phone"] or "-"} · 대기 지역 {d["location"]} · 사업자 {d.get("biz_no") or "-"} '
+                    f'({biz.get("source_label", "-")})</div>'
+                    f'<div style="margin-top:6px">{checks}</div>'
+                    f'<div class="ct-muted" style="margin-top:6px">제출 서류: {docs}</div>'
+                    + (f'<div style="color:#B42318;font-size:12.5px;margin-top:4px">⚠ {" / ".join(cp["issues"])}</div>'
+                       if cp["issues"] else "") + f'</div><div>{ui.pill("승인 대기", "amber")}</div></div>')
             c1, c2, c3 = st.columns([2.2, 1, 1], vertical_alignment="bottom")
             reason = c1.text_input("반려 사유", key=f"reason_{d['id']}", placeholder="반려할 때만 입력",
                                    label_visibility="collapsed")
@@ -64,11 +82,54 @@ def _drivers_tab(drivers: list[dict]):
                           success=f"{d['name']} 기사를 승인했습니다. 이제 자동 매칭 후보입니다."):
                     st.rerun()
     ui.section("전체 차주", f"{len(drivers)}명")
+    st.caption("배차 가능 = 관제 승인 + 사업용 노란 번호판(바 · 사 · 아 · 자) + 이용 제한 아님. "
+               "사업자번호는 Mod-10 검증 + 국세청 상태(키 없으면 모의 판정).")
     st.dataframe(pd.DataFrame([{
-        "기사": d["name"], "ID": d["id"], "차종": d["truck_type"], "차량": d["plate"], "대기 지역": d["location"],
+        "기사": d["name"], "ID": d["id"], "차종": d["truck_type"], "톤수": d["compliance"]["tonnage"],
+        "차량": d["plate"], "번호판": PLATE_LABEL.get(d["compliance"]["plate_type"], "-"),
         "심사": {"PENDING": "승인 대기", "APPROVED": "승인", "REJECTED": "반려"}.get(d["status"], d["status"]),
-        "처리": d.get("decided_by") or "-", "사유": d.get("reason") or "",
-    } for d in drivers]), hide_index=True, width="stretch")
+        "평점": (d.get("rating") or {}).get("avg"), "리뷰": (d.get("rating") or {}).get("count"),
+        "배차 가능": "가능" if d["dispatchable"] else "불가", "사유": " / ".join(d["compliance"]["issues"])
+        + (" / 이용 제한" if d["blacklisted"] else "") or (d.get("reason") or ""),
+    } for d in drivers]), hide_index=True, width="stretch", column_config={
+        "톤수": st.column_config.NumberColumn(format="%.1f톤"),
+        "평점": st.column_config.NumberColumn(format="%.2f★")})
+
+
+# ------------------------------------------------------------------ 리뷰 · 블랙리스트
+def _reviews_tab(rep: list[dict]):
+    tags = ui.load(api.get, "/reviews/tags")
+    st.caption(f"화주 ↔ 기사 상호 별점 · 태그 평가. 기사 평점은 매칭 AI 피처로 쓰입니다. {tags['blacklist_rule']}")
+    st.dataframe(pd.DataFrame([{
+        "기사": f"{r['name']} ({r['id']})", "차량": r["plate"], "평점": r["avg"], "리뷰": r["count"],
+        "주요 태그": ", ".join(r["top_tags"]),
+        "상태": "이용 제한" if r["blacklisted"] else ("주의" if r["at_risk"] else "정상"),
+        "제한 사유": (r["blacklist"] or {}).get("reason", "") if r["blacklisted"] else "",
+    } for r in rep]), hide_index=True, width="stretch", column_config={
+        "평점": st.column_config.NumberColumn(format="%.2f★")})
+    with st.container(border=True):
+        ui.section("이용 제한 · 해제", "제한하면 매칭 후보에서 바로 빠지고 진행 중인 제안도 회수됩니다")
+        c1, c2, c3, c4 = st.columns([1.6, 2.2, 0.8, 0.8], vertical_alignment="bottom")
+        pick = c1.selectbox("기사", rep, format_func=lambda r: f"{r['name']} · {r['plate']}"
+                            + (" (제한 중)" if r["blacklisted"] else ""), key="bl_pick")
+        reason = c2.text_input("사유", placeholder="예) 화물 파손 반복 · 연락 두절", key="bl_reason")
+        if c3.button("제한", type="primary", width="stretch", disabled=pick is None or pick["blacklisted"]):
+            if ui.act(api.post, f"/admin/drivers/{pick['id']}/blacklist", json={"on": True, "reason": reason},
+                      success=f"{pick['name']} 기사를 이용 제한했습니다."):
+                st.rerun()
+        if c4.button("해제", width="stretch", disabled=pick is None or not pick["blacklisted"]):
+            if ui.act(api.post, f"/admin/drivers/{pick['id']}/blacklist", json={"on": False, "reason": reason or "관제 해제"},
+                      success=f"{pick['name']} 기사의 이용 제한을 풀었습니다."):
+                st.rerun()
+    reviews = ui.load(api.get, "/admin/reviews")
+    ui.section("최근 리뷰", f"{len(reviews)}건")
+    if reviews:
+        st.dataframe(pd.DataFrame([{
+            "일시": ui.dt_text(r["at"], "%m.%d %H:%M"), "화물": r["order_id"],
+            "방향": "화주 → 기사" if r["to_role"] == "driver" else "기사 → 화주",
+            "작성": r["writer"], "대상": r["target"], "별점": "★" * r["stars"] + "☆" * (5 - r["stars"]),
+            "태그": ", ".join(r["tags"]), "코멘트": r["comment"],
+        } for r in reviews]), hide_index=True, width="stretch")
 
 
 # ------------------------------------------------------------------ 감사 로그
@@ -77,7 +138,14 @@ def _audit_tab(audit: list[dict]):
     q = c1.text_input("화물 ID 검색", placeholder="예: ORD-20261116-01", label_visibility="collapsed")
     fin = c2.toggle("재무 변경만 (청구 · 결제 · 취소)")
     rows = [e for e in audit if (not q or q.strip().upper() in e["order_id"]) and (not fin or e["financial"])]
-    st.caption("상태는 engines/fsm/order_fsm.py 의 전이표로만 바뀌고, 모든 전이가 여기에 남습니다. 수정 · 삭제할 수 없습니다.")
+    st.caption("상태는 engines/fsm/order_fsm.py 의 전이표로만 바뀌고, 모든 전이 · 관제 조치가 여기에 남습니다. "
+               "각 줄은 직전 줄의 해시를 이어 SHA-256 으로 묶여 있어(해시 체인) 한 줄이라도 고치면 검사에 걸립니다.")
+    if st.button("해시 체인 위변조 검사", icon=":material/verified:"):
+        v = ui.load(api.get, "/admin/audit/verify")
+        if v["ok"]:
+            st.success(f"정상 · {v['checked']}줄 모두 해시 일치 · 마지막 해시 {v['head'][:16]}…", icon=":material/verified:")
+        else:
+            st.error(f"위변조 의심 · {v['broken_at']} 에서 끊김 — {v['reason']}", icon=":material/gpp_bad:")
     if not rows:
         st.info("조건에 맞는 이력이 없습니다.")
         return
@@ -86,6 +154,7 @@ def _audit_tab(audit: list[dict]):
         "구분": "재무" if e["financial"] else ("청구" if e["kind"] == "billing" else "화물"),
         "이벤트": e["label"], "이전": e["from"] or "-", "이후": e["to"], "누가": e["actor"],
         "금액": e["amount"], "비고": e["note"],
+        "해시": (e.get("current_hash") or "")[:12], "이전 해시": (e.get("previous_hash") or "")[:12],
     } for e in rows]), hide_index=True, width="stretch", height=480, column_config={
         "금액": st.column_config.NumberColumn(format="%,d원"),
         "비고": st.column_config.TextColumn(width="large")})

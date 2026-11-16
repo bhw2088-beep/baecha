@@ -7,9 +7,36 @@
           화면 응답 matching, 매칭 분석(/admin/matching), 배차 제안(/driver/offer),
           AI 추천 리스트(/driver/recommendations · rec), 도로 경로(route = 도로 경로 점 목록, fleet.path,
           route_cache.json)
-   삭제 : 별점·리뷰(rating, rating_tags, review, avg_rating, drivers.rating), SLA 고정값(sla_rate,
+   삭제 : 별점·리뷰(rating, rating_tags, review, avg_rating, drivers.rating) ※ 4차에서 새 구조(reviews 테이블)로 다시 추가, SLA 고정값(sla_rate,
           on_time_rate, SLA_KPI, SLA_TREND), 교통 정보(/admin/traffic), 이상 조치(actions, cooling),
           오더 보드 전용 값(pickup_km/compatible/match_rate/tags)
+
+
+ ============================================================================
+ [4차 변경 · 명세 Phase 0~8 새 테이블 · 필드]
+ ============================================================================
+ 새 테이블
+   reviews                 id★(REV-<화물>-<S|D>) · order_id · from_role · to_role · to_id · stars · at · data(tags · comment · from_id)
+   matching_metrics_logs   id★(MR-n) · at · orders · assigned · latency_ms · deadhead_reduction_pct
+                           · data(drivers · greedy_assigned · hungarian_avg_km · greedy_avg_km · threshold_filtered · failed)
+   audit_logs (컬럼 추가)  previous_hash · current_hash (SHA-256 해시 체인) — 기존 DB 는 서버 시작 시 자동 추가
+ 새 필드
+   drivers   plate_type(COMMERCIAL_YELLOW · PRIVATE_WHITE · RENTAL · INVALID) · tonnage · blacklisted · blacklist{at, by, reason, auto}
+             approval.biz_check · approval.documents[kind = license · cargo_license · vehicle]
+   shippers  biz_check{ok, status, label, source, biz_no, checked_at} · owner_name
+   orders    required_tonnage · gps{lat, lon, dist_km, off_count, engine, source} · fare_est.market{region, demand, supply,
+             ds_ratio, surge, rush_hour, weather, weather_multiplier}
+   anomalies type 추가 DELAY · SUSPICIOUS_REOUTSOURCING, auto
+ 화면 응답
+   order_view: deviated · gps · required_tonnage · review{by_shipper, by_driver}
+   driver_profile: plate_type · tonnage · rating{avg, count, top_tags} · blacklisted · dispatchable
+   admin_summary: deviated · delayed · blacklisted · surge_regions
+   매칭 평가 행: cf_score · lgb_pass   ·   /admin/matching/metrics: dispatch_latency_p95_sec · empty_deadhead_km_reduction_pct ·
+   rejection_rate_pct · threshold_filtered
+ 새 API
+   /compliance/check · /tracking/ping(·/batch) · /admin/tracking · /admin/audit/verify · /pricing/market ·
+   /reviews(tags · pending · mine) · /admin/reviews · /admin/reputation · /admin/drivers/{id}/blacklist ·
+   /admin/matching/metrics · /admin/agent/ask · /admin/agent/incident/{id} · /admin/agent/tuning
 
 
  ============================================================================

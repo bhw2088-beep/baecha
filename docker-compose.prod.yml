@@ -1,0 +1,120 @@
+# 배차의 민족 — 운영(프로덕션)용 멀티 컨테이너 구성 (Phase 0 · 8)
+#
+#   실행:  docker compose -f docker-compose.prod.yml up --build -d
+#   점검:  docker compose -f docker-compose.prod.yml ps
+#
+# 개발용(docker-compose.yml)과 다른 점
+#   - DB · Redis 포트를 밖으로 열지 않음 (컨테이너 네트워크 안에서만 접속)
+#   - 모든 서비스 restart: unless-stopped (재부팅 · 장애 후 자동 재시작)
+#   - 백엔드 · 프론트엔드 헬스체크 → 준비된 뒤에 다음 서비스 시작
+#   - 백엔드는 워커 1개로 실행: 저장소가 '메모리 작업본 + PostgreSQL write-behind' 구조라 한 프로세스만 써야 한다
+#     (여러 대로 늘리려면 저장소를 DB 트랜잭션 방식으로 바꿔야 함 → 명세_비교_정리.md 9장 제한 사항)
+#   - 가상 GPS 시뮬레이터는 프로필 'sim' 일 때만:  ... --profile sim up -d
+#   - 무중단 배포: 이미지만 새로 빌드한 뒤  up -d --no-deps frontend  처럼 서비스별로 교체
+#     (backend 는 1개 프로세스라 교체 순간 몇 초 끊김 — 앞단에 프록시 · 재시도 권장)
+# .env 의 POSTGRES_PASSWORD · SIM_API_KEY · ADMIN_APPROVAL_CODE 는 반드시 운영용 값으로 바꿀 것.
+name: baecha-prod
+
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Seoul
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]   # Streams · 락 데이터 디스크 보존
+    environment:
+      TZ: Asia/Seoul
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  backend:
+    build: .
+    restart: unless-stopped
+    command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers
+    env_file: .env
+    environment:
+      TZ: Asia/Seoul
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: celery -A backend.workers.celery_app worker -l info --concurrency 2 -n packer@%h
+    env_file: .env
+    environment:
+      TZ: Asia/Seoul
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build: .
+    restart: unless-stopped
+    command: python -m streamlit run frontend/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
+    environment:
+      TZ: Asia/Seoul
+      BAECHA_API_BASE: http://backend:8000/api/v1
+    ports:
+      - "8501:8501"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  simulator:
+    build: .
+    profiles: ["sim"]
+    restart: unless-stopped
+    command: python -m simulator.virtual_driver
+    environment:
+      TZ: Asia/Seoul
+      API_BASE: http://backend:8000/api/v1
+      SIM_API_KEY: ${SIM_API_KEY}
+      TIME_SCALE: ${TIME_SCALE:-20}
+      SIM_DEVIATION_EVERY: ${SIM_DEVIATION_EVERY:-240}
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pg_data:
+  redis_data:

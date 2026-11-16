@@ -13,11 +13,13 @@ import hashlib
 from datetime import datetime
 
 from ..core.errors import ApiError
+from ..engines import pricing_engine as market_engine
 from ..engines.matcher import spatial as geo
 
 # 차종: (최저 운임, km 단가)
 TRUCK_TYPES: dict[str, tuple[int, int]] = {
     "1톤 카고": (120_000, 1_600),
+    "2.5톤 카고": (180_000, 1_900),
     "5톤 윙바디": (250_000, 2_300),
     "5톤 냉동탑차": (280_000, 2_500),
     "11톤 탑차": (360_000, 2_800),
@@ -28,14 +30,9 @@ TRUCK_TYPES: dict[str, tuple[int, int]] = {
 COLD_TYPES = {"5톤 냉동탑차", "11톤 냉동탑차"}
 
 
-def current_weather(now: datetime | None = None) -> tuple[str, int]:
-    """기상청 API 연동 전까지는 시간대 기반으로 흉내만 낸다."""
-    now = now or datetime.now()
-    if now.hour in (6, 7, 8, 17, 18, 19):
-        return "강우 · 서행", 15_000
-    if now.hour >= 22 or now.hour < 5:
-        return "야간 · 시정 저하", 10_000
-    return "맑음", 0
+def current_weather(region: str = "대전", now: datetime | None = None) -> dict:
+    """기상청 모의 API (engines/pricing_engine.py): 확률 분포 맑음 · 비(+15%) · 폭설(+30%)."""
+    return market_engine.mock_get_weather_condition(region, now)
 
 
 def _round5k(value: float) -> int:
@@ -55,17 +52,27 @@ def weight_surcharge(base: int, truck_type: str, weight_kg: float | None) -> tup
 
 def estimate(truck_type: str, origin: str, destination: str, *,
              cold_chain: bool = False, urgent: bool = False, wait_minutes: int = 30,
-             weight_kg: float | None = None) -> dict:
-    """거리(도로) · 차종 · 중량 · 조건으로 적정 운임을 계산한다."""
+             weight_kg: float | None = None, market: dict | None = None) -> dict:
+    """거리(도로) · 차종 · 중량 · 조건 · 날씨 · 권역 수급으로 적정 운임을 계산한다.
+    market: 상차 권역 수급 지수 (store.market_status). 없으면 가상 수요 · 공급만으로 계산."""
     min_fare, per_km = TRUCK_TYPES.get(truck_type, TRUCK_TYPES["11톤 탑차"])
     distance = geo.road_km(origin, destination)
     base = _round5k(max(min_fare, per_km * distance))
     weight_fee, weight_detail = weight_surcharge(base, truck_type, weight_kg)
 
-    weather_label, weather_fee = current_weather()
+    mk = market or market_engine.market(market_engine.region_of(origin))
+    w = mk["weather"]
+    surge = mk["surge"]
     factors = [
         {"key": "weight", "label": "적재 중량", "detail": weight_detail, "amount": weight_fee},
-        {"key": "weather", "label": "기상 상태", "detail": weather_label, "amount": weather_fee},
+        {"key": "weather", "label": "기상 상태 (모의 기상)",
+         "detail": f"{w['region']} {w['label']}" + (f" · +{w['multiplier']:.0%}" if w["multiplier"] else ""),
+         "amount": _round5k(base * w["multiplier"])},
+        {"key": "surge", "label": "수급 서지 (D/S)",
+         "detail": (f"{mk['region']} 수요 {mk['demand']} ÷ 공급 {mk['supply']} = {mk['ds_ratio']}"
+                    + (f" > 1.5 → +{surge:.0%}" if surge else " (1.5 이하 · 할증 없음)")
+                    + (" · 러시아워" if mk["rush_hour"] else "")),
+         "amount": _round5k(base * surge)},
         {"key": "urgent", "label": "긴급성", "detail": "당일 특송" if urgent else "일반", "amount": 20_000 if urgent else 0},
         {"key": "wait", "label": "현장 대기시간", "detail": f"예상 {wait_minutes}분",
          "amount": (wait_minutes // 30) * 10_000},
@@ -82,6 +89,8 @@ def estimate(truck_type: str, origin: str, destination: str, *,
         "factors": factors,
         "recommended": _round5k(total),
         "band": [_round5k(total * 0.93), _round5k(total * 1.08)],
+        "market": {k: mk[k] for k in ("region", "demand", "supply", "ds_ratio", "surge", "surge_on", "rush_hour")}
+        | {"weather": w["label"], "weather_multiplier": w["multiplier"]},
     }
 
 
@@ -130,16 +139,30 @@ class MockPG:
 class BillingMixin:
     """차주 → 화주 청구 · 화주 결제 승인(모의 PG) · 결제 취소/환불 · 월별 인보이스 (Store 에 섞어 쓰는 Mixin)."""
 
-    @staticmethod
-    def _fare_est(o: dict) -> dict:
-        """AI 적정 운임 (도로거리 · 차종 · 적재 중량 · 조건). 등록 시점 기준으로 한 번 계산해 화물에 저장한다."""
+    def market_status(self, region: str) -> dict:
+        """권역 수급 지수: 실제 매칭 대기 화물(수요) · 빈 기사(공급) + 포아송 가상 콜 · 기본 공차."""
+        demand = sum(1 for o in self.orders.values()
+                     if o["status"] == "MATCHING" and market_engine.region_of(o["origin"]) == region)
+        supply = sum(1 for d in self.drivers.values()
+                     if market_engine.region_of(d["location"]) == region and self.driver_dispatchable(d)
+                     and not self._active_run_of(d["id"]))
+        return market_engine.market(region, demand, supply)
+
+    def market_board(self) -> list[dict]:
+        """전 권역 수급 현황 (관제 화면 · AI 관제)."""
+        return sorted((self.market_status(r) for r in market_engine.BASE_DEMAND), key=lambda m: -m["ds_ratio"])
+
+    def _fare_est(self, o: dict) -> dict:
+        """AI 적정 운임 (도로거리 · 차종 · 적재 중량 · 조건 · 날씨 · 수급). 등록 시점 기준으로 한 번 계산해 저장한다."""
         est = o.get("fare_est")
         if est is None:
             w = o["packing"]["metrics"]["loaded_weight"] if o["packing"] else None
             e = estimate(o["truck_type"], o["origin"], o["destination"], cold_chain=o["cold_chain"],
-                         urgent=o["urgent"], weight_kg=w)
+                         urgent=o["urgent"], weight_kg=w,
+                         market=self.market_status(market_engine.region_of(o["origin"])))
             est = o["fare_est"] = {k: e[k] for k in ("recommended", "band", "base", "distance_km", "per_km",
-                                                     "weight_kg")} | {"factors": [f for f in e["factors"] if f["amount"]]}
+                                                     "weight_kg", "market")} | {
+                "factors": [f for f in e["factors"] if f["amount"]]}
         fare = o["price"] + o["incentive"]
         return {**est, "fare": fare, "gap_ratio": round((fare - est["recommended"]) / est["recommended"], 3),
                 "fare_per_km": round(fare / max(o["distance_km"], 1))}

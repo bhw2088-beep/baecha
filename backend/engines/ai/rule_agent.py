@@ -11,7 +11,14 @@ LLM 처럼 자유 대화를 하지는 않지만, 항상 같은 기준으로 판�
   4. 응답 임박 제안  : 수락 제한시간 15초 이하 → 다음 순위 대비 안내
   5. 정산 지연      : 청구 후 3일 넘게 미승인 → 화주 승인 요청
   6. 가입 심사 대기  : 승인 대기 차주 → 서류 확인 요청
+  7. 평판 · 제재     : 블랙리스트 · 평점 주의 기사
+  8. 수급 서지       : D/S 1.5 초과 권역 → 운임 할증 · 공차 유도 안내
 결과: severity(HIGH/MEDIUM/LOW) 순으로 정렬한 인사이트 목록 + 한 줄 브리핑
+
+그 밖에
+  tuning_guide()    : 거절률 · 임계값 차단 · 평점으로 LightGBM 임계값 · 가중치 조절 가이드
+  incident_report() : 이상 감지 한 건 → 액션 아이템 형태 인시던트 리포트
+  handle_command()  : 관제 자연어 명령을 키워드 규칙으로 처리 (Gemini 키가 없을 때 대신 사용)
 """
 
 from __future__ import annotations
@@ -80,8 +87,16 @@ def rule_anomalies(store) -> list[dict]:
             why = "장시간 정체 — 사고 · 고장 · 휴게 여부 확인 필요."
             msg = f"[관제] {a['driver']} 기사님, 현재 차량이 오래 멈춰 있습니다. 상황을 알려 주세요. 필요하면 우회 경로를 안내드리겠습니다."
             sev = "HIGH" if a["severity"] == "HIGH" else "MEDIUM"
+        elif a["type"] == "SUSPICIOUS_REOUTSOURCING":
+            why = "배정 기사가 아닌 단말이 위치를 보고 — 불법 다단계 재위탁 의심."
+            msg = f"[관제] {a['driver']} 기사님, 배정 차량 단말이 아닌 곳에서 위치가 보고되었습니다. 직접 운행 중인지 확인해 주세요."
+            sev = "HIGH"
+        elif a["type"] == "DELAY":
+            why = "계획 ETA 대비 30분 넘게 늦어짐 — 화주 안내 필요."
+            msg = f"[관제] {a['driver']} 기사님, 도착이 늦어지고 있습니다. 예상 도착 시각을 알려 주세요."
+            sev = "MEDIUM"
         else:
-            why = "계획 경로를 벗어남 — 우회 · 오배송 여부 확인 필요."
+            why = "계획 경로를 벗어남 (연속 3회 확인 · 디바운싱 통과) — 우회 · 오배송 여부 확인 필요."
             msg = f"[관제] {a['driver']} 기사님, 계획 경로에서 벗어났습니다. 우회 중이시면 사유를 알려 주세요."
             sev = "MEDIUM"
         out.append(_insight(sev, "운행 이상", f"{a['type_label']} · {a['plate']} ({a['driver']})", why,
@@ -145,7 +160,138 @@ def rule_compliance(store) -> list[dict]:
                      action={"type": "link", "label": "컴플라이언스에서 심사", "page": "compliance"})]
 
 
-RULES = [rule_failed_matches, rule_anomalies, rule_delays, rule_offers, rule_settlement, rule_compliance]
+def rule_reputation(store) -> list[dict]:
+    out = []
+    for r in store.reputation_board():
+        if r["blacklisted"]:
+            b = r["blacklist"] or {}
+            out.append(_insight("LOW", "평판 · 제재", f"{r['name']} ({r['plate']}) 이용 제한 중",
+                                f"{b.get('reason', '')} — 매칭 후보에서 제외되어 있습니다.",
+                                evidence=[f"평점 {r['avg']} · 리뷰 {r['count']}건", ", ".join(r["top_tags"])]))
+        elif r["at_risk"]:
+            out.append(_insight("LOW", "평판 · 제재", f"{r['name']} 평점 주의 ({r['avg']}점 · {r['count']}건)",
+                                "리뷰가 한 건 더 나쁘면 자동 이용 제한 기준에 걸립니다. 운행 품질 안내를 권장합니다.",
+                                evidence=[", ".join(r["top_tags"])]))
+    return out
+
+
+def rule_market(store) -> list[dict]:
+    out = []
+    for m in store.market_board():
+        if not m["surge_on"]:
+            continue
+        out.append(_insight("LOW", "수급 서지", f"{m['region']} 수요 초과 D/S {m['ds_ratio']} → 운임 +{m['surge']:.0%}",
+                            "콜이 빈 차량보다 1.5배 넘게 많습니다. 인접 권역 공차에 이동 인센티브를 안내하는 것을 권장합니다.",
+                            evidence=[f"수요 {m['demand']} (실제 {m['real_demand']}) · 공급 {m['supply']} (실제 {m['real_supply']})",
+                                      f"날씨 {m['weather']['label']}" + (" · 러시아워" if m["rush_hour"] else "")]))
+    return out
+
+
+RULES = [rule_failed_matches, rule_anomalies, rule_delays, rule_offers, rule_settlement, rule_compliance,
+         rule_reputation, rule_market]
+
+
+# ------------------------------------------------------------------ 임계값 · 가중치 조절 가이드
+def tuning_guide(store) -> dict:
+    """거절률 · 임계값 차단 · 평점 피드백으로 매칭 설정 조절 방향을 제안 (자동 적용하지 않음)."""
+    m = store.matching_metrics()
+    s = store.settings
+    rej, filtered = m["rejection_rate_pct"], m["threshold_filtered"]
+    failed = len(store.failed_matches())
+    th = m["ml_threshold"]
+    tips = []
+    if rej is not None and rej > 30:
+        tips.append({"target": "lgb_score 임계값", "now": th, "suggest": round(min(0.9, th + 0.05), 2),
+                     "why": f"기사 거절률 {rej}% > 30% — 수락 가능성이 낮은 제안을 더 걸러야 합니다."})
+    if filtered and failed:
+        tips.append({"target": "lgb_score 임계값", "now": th, "suggest": round(max(0.6, th - 0.05), 2),
+                     "why": f"임계값 미달로 {filtered}쌍이 걸러졌고 매칭 실패 {failed}건 — 너무 보수적일 수 있습니다."})
+    surge = [x["region"] for x in store.market_board() if x["surge_on"]]
+    if surge:
+        tips.append({"target": "탐색 반경", "now": s["radius_km"], "suggest": min(200, s["radius_km"] + 20),
+                     "why": f"수요 초과 권역({', '.join(surge[:4])})은 반경을 넓혀 인접 공차를 끌어오는 것이 유리합니다."})
+    low = [r for r in store.reputation_board() if r["avg"] is not None and r["avg"] < 3.5 and not r["blacklisted"]]
+    if low:
+        tips.append({"target": "평점 피처", "now": "LightGBM rating", "suggest": "유지",
+                     "why": f"평점 3.5 미만 기사 {len(low)}명 — 평점이 수락 예측에 반영되고 있어 별도 조치 불필요."})
+    if not tips:
+        tips.append({"target": "현재 설정", "now": f"반경 {s['radius_km']}km · 임계값 {th}", "suggest": "유지",
+                     "why": "거절률 · 실패 · 수급 모두 기준 안입니다."})
+    return {"metrics": {k: m[k] for k in ("rejection_rate_pct", "threshold_filtered", "dispatch_latency_p95_sec",
+                                           "empty_deadhead_km_reduction_pct")}, "failed_matches": failed, "tips": tips}
+
+
+# ------------------------------------------------------------------ 인시던트 리포트
+def incident_report(store, anomaly_id: str) -> dict:
+    a = next((x for x in store.list_anomalies() if x["id"] == anomaly_id), None)
+    if not a:
+        return {"ok": False, "text": "해당 이상 감지 건을 찾을 수 없습니다."}
+    o = store.orders.get(a["order_id"]) if a["order_id"] else None
+    items = {
+        "COLD": ["기사에게 냉동기 · 문 닫힘 즉시 확인 요청", "화주 품질 담당에게 온도 이탈 시각 · 폭 공유", "하차 시 온도 기록지 확인"],
+        "STAGNATION": ["기사 통화로 사고 · 고장 여부 확인", "30분 이상이면 대체 차량 수배 검토", "화주에게 ETA 재안내"],
+        "DEVIATION": ["기사에게 우회 사유 확인 (통제 · 휴게 · 오배송)", "사유 불명확 시 경로 복귀 안내",
+                      "반복되면 리뷰 · 평판 모니터링 대상 등록"],
+        "DELAY": ["화주에게 새 도착 예정 시각 안내", "하차지 도크 대기 조정 요청", "지연 사유 기록 (정산 분쟁 대비)"],
+        "SUSPICIOUS_REOUTSOURCING": ["배정 기사와 즉시 통화 · 실제 운전자 확인", "재위탁 확인 시 운행 중지 · 이용 제한 검토",
+                                     "감사 로그 해시 체인으로 보고 이력 보존"],
+    }.get(a["type"], ["상황 확인"])
+    lines = [f"[인시던트 리포트] {a['id']} · {a['type_label']} · 심각도 {a['severity']}",
+             f"- 발생: {a['at']} · {a['location']}", f"- 차량: {a['plate']} ({a['driver']}) · 연락처 {a['phone']}",
+             f"- 내용: {a['text']} / {a.get('detail') or ''}"]
+    if o:
+        lines.append(f"- 화물: {o['id']} {o['title']} · {o['origin']} → {o['destination']} · 진행률 {o['progress']:.0f}%")
+    lines.append("액션 아이템")
+    lines += [f"  {i}. {t}" for i, t in enumerate(items, start=1)]
+    return {"ok": True, "engine": "rule-based", "anomaly_id": anomaly_id, "text": "\n".join(lines),
+            "action_items": items}
+
+
+# ------------------------------------------------------------------ 자연어 명령 (규칙 · Gemini 대체)
+def handle_command(store, text: str) -> dict:
+    """키워드 규칙으로 관제 명령을 처리한다. 예) '매칭 실패 보여줘', '지연 차량', '반경 70km로', '수급', '임계값'."""
+    import re
+    t = text.strip()
+    if not t:
+        return {"engine": "rule-based", "answer": "명령을 입력해 주세요.", "data": None}
+    m = re.search(r"반경\s*(\d{2,3})\s*km", t)
+    if m and any(k in t for k in ("바꿔", "변경", "로", "설정")):
+        r = int(m.group(1))
+        if not 10 <= r <= 200:
+            return {"engine": "rule-based", "answer": "반경은 10~200km 사이로 지정해 주세요.", "data": None}
+        store.update_settings({**store.settings, "radius_km": r}, by="AI 관제 (규칙)")
+        return {"engine": "rule-based", "answer": f"탐색 반경을 {r}km 로 바꾸고 매칭 실패 화물부터 다시 매칭했습니다.",
+                "data": store.settings_view(), "applied": True}
+    if "실패" in t:
+        rows = store.failed_matches()
+        ans = f"매칭 실패 {len(rows)}건: " + "; ".join(f"{v['id']} {v['title']} ({v['reasons'][0]})" for v in rows[:5])
+        return {"engine": "rule-based", "answer": ans if rows else "매칭 실패 화물이 없습니다.", "data": rows[:5]}
+    if "지연" in t:
+        rows = [store.order_view(o) for o in store.orders.values() if o["status"] == "IN_TRANSIT" and o["delay_minutes"] >= 30]
+        ans = "; ".join(f"{v['id']} {v['driver']['name'] if v['driver'] else '-'} +{v['delay_minutes']}분" for v in rows)
+        return {"engine": "rule-based", "answer": f"30분 이상 지연 {len(rows)}건: {ans}" if rows else "30분 이상 지연된 운행이 없습니다.",
+                "data": rows}
+    if "이탈" in t or "재위탁" in t or "이상" in t:
+        rows = store.list_anomalies("ALL", "UNSOLVED")
+        ans = "; ".join(f"{a['type_label']} {a['plate']} ({a['text']})" for a in rows[:6])
+        return {"engine": "rule-based", "answer": f"미조치 이상 {len(rows)}건: {ans}" if rows else "미조치 이상 감지가 없습니다.",
+                "data": rows[:6]}
+    if "수급" in t or "서지" in t or "날씨" in t:
+        rows = store.market_board()
+        hot = [f"{x['region']} D/S {x['ds_ratio']}(+{x['surge']:.0%}, {x['weather']['label']})" for x in rows if x["surge_on"]]
+        return {"engine": "rule-based", "answer": ("서지 발동 권역: " + ", ".join(hot)) if hot else "서지 발동 권역이 없습니다.",
+                "data": rows}
+    if "임계" in t or "가중치" in t or "튜닝" in t:
+        g = tuning_guide(store)
+        return {"engine": "rule-based", "answer": " / ".join(f"{x['target']}: {x['now']} → {x['suggest']} ({x['why']})"
+                                                            for x in g["tips"]), "data": g}
+    if "블랙" in t or "평점" in t or "리뷰" in t:
+        rows = store.reputation_board()[:6]
+        ans = "; ".join(f"{r['name']} {r['avg'] or '-'}점({r['count']}건){' · 제한' if r['blacklisted'] else ''}" for r in rows)
+        return {"engine": "rule-based", "answer": ans, "data": rows}
+    b = briefing(store)
+    return {"engine": "rule-based", "answer": b["summary"], "data": b["counts"],
+            "hint": "예) '매칭 실패 보여줘' · '지연 차량' · '경로 이탈' · '수급 현황' · '임계값 가이드' · '반경 70km로 바꿔'"}
 
 
 def briefing(store) -> dict:

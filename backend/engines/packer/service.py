@@ -16,6 +16,14 @@ class PackingError(ValueError):
     pass
 
 
+def _safety_margin() -> float:
+    try:
+        from ...config import settings
+        return settings.safety_margin
+    except Exception:  # noqa: BLE001 — 엔진 단독 실행
+        return 0.10
+
+
 def _run(container, boxes, options: Options, cold_chain: bool) -> dict:
     res = EPPacker(container, options).pack(boxes)
     rows = [p.to_dict() for p in res["placements"]]
@@ -27,8 +35,13 @@ def _run(container, boxes, options: Options, cold_chain: bool) -> dict:
         "steps": res["steps"],
         "metrics": {**summarize(container, rows, len(boxes), total_w), "elapsed_ms": res["elapsed_ms"]},
         "constraints": validate(container, rows, min_support=options.min_support, lifo=options.lifo,
-                                cold_chain=cold_chain),
+                                cold_chain=cold_chain, safety_margin=_safety_margin()),
     }
+
+
+def _ok(r: dict) -> bool:
+    """전량 적재 + 필수 제약(안전율 · 축중량 포함) 위반 없음."""
+    return r["metrics"]["unplaced"] == 0 and not any(c["status"] == "fail" for c in r["constraints"])
 
 
 def plan(items: list[ItemSpec], *, truck_type: str | None, cold_chain: bool, options: Options,
@@ -52,20 +65,23 @@ def plan(items: list[ItemSpec], *, truck_type: str | None, cold_chain: bool, opt
         for t in compatible_trucks(cold_chain):
             row = {"truck_type": t.name, "evaluated": False, "placed": 0, "total": len(boxes),
                    "volume_util": None, "weight_util": None, "fits": False}
-            # 사전 검사: 총중량/총부피가 이미 차량 한계를 넘으면 시뮬레이션 생략
-            if total_w > t.max_weight:
-                row["note"] = "총중량 초과"
-            elif total_v > t.volume:
-                row["note"] = "총부피 초과"
+            # 사전 검사: 안전율을 적용한 한도를 이미 넘으면 시뮬레이션 생략
+            limit = 1 - _safety_margin()
+            if total_w > t.max_weight * limit:
+                row["note"] = "총중량 초과 (안전율 적용)"
+            elif total_v > t.volume * limit:
+                row["note"] = "총부피 초과 (안전율 적용)"
             elif chosen is not None:
                 row["note"] = "더 작은 차량으로 충분"
             else:
                 r = _run(t, boxes, options, cold_chain)
                 m = r["metrics"]
+                failed = [c["name"] for c in r["constraints"] if c["status"] == "fail"]
                 row.update(evaluated=True, placed=m["placed"], volume_util=m["volume_util"],
-                           weight_util=m["weight_util"], fits=m["unplaced"] == 0,
-                           note="전량 적재" if m["unplaced"] == 0 else f"{m['unplaced']}개 미적재")
-                if m["unplaced"] == 0:
+                           weight_util=m["weight_util"], fits=_ok(r),
+                           note=("전량 적재" if _ok(r) else f"{m['unplaced']}개 미적재" if m["unplaced"]
+                                 else "제약 위반: " + ", ".join(failed)))
+                if _ok(r):
                     chosen = r
                 if best is None or m["placed"] > best["metrics"]["placed"]:
                     best = r
@@ -74,8 +90,11 @@ def plan(items: list[ItemSpec], *, truck_type: str | None, cold_chain: bool, opt
         if chosen is None:
             raise PackingError("냉장/중량/부피 조건을 만족하는 차량이 없습니다. 품목을 나누어 등록해 주세요.")
 
+    from ..validation_engine import required_tonnage
     out = {**chosen, "auto": truck_type is None, "candidates": candidates,
-           "options": vars(options), "cold_chain": cold_chain}
+           "options": vars(options), "cold_chain": cold_chain, "safety_margin": _safety_margin(),
+           "required_tonnage": required_tonnage(total_w, total_v, list(TRUCKS.values()), _safety_margin(),
+                                                cold_chain)}
     if compare_baseline:
         container = TRUCKS[chosen["truck"]["name"]]
         b = run_py3dbp(container, boxes)
@@ -84,7 +103,7 @@ def plan(items: list[ItemSpec], *, truck_type: str | None, cold_chain: bool, opt
             "placements": b["placements"], "unplaced": b["unplaced"],
             "metrics": {**summarize(container, b["placements"], len(boxes), total_w), "elapsed_ms": b["elapsed_ms"]},
             "constraints": validate(container, b["placements"], min_support=options.min_support,
-                                    lifo=options.lifo, cold_chain=cold_chain),
+                                    lifo=options.lifo, cold_chain=cold_chain, safety_margin=_safety_margin()),
         }
     return out
 

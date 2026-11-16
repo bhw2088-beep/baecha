@@ -9,7 +9,8 @@ import api
 import ui
 
 LAYERS = {"all": "전체", "transit": "운행중", "empty": "공차", "cold": "콜드체인", "anomaly": "이상감지"}
-TYPE_LABEL = {"ALL": "전체 유형", "COLD": "온도 이상", "STAGNATION": "장시간 정체", "DEVIATION": "경로 이탈"}
+TYPE_LABEL = {"ALL": "전체 유형", "COLD": "온도 이상", "STAGNATION": "장시간 정체", "DEVIATION": "경로 이탈",
+              "DELAY": "도착 지연", "SUSPICIOUS_REOUTSOURCING": "재위탁 의심"}
 
 
 # ======================================================================= 전국 관제 지도
@@ -26,7 +27,23 @@ def agent_panel():
     c = b["counts"]
     head = f"AI 관제 브리핑 · 긴급 {c['HIGH']} · 주의 {c['MEDIUM']} · 참고 {c['LOW']}"
     with st.expander(head, icon=":material/smart_toy:", expanded=c["HIGH"] > 0):
-        st.caption(f"{b['agent']} · {b['engine']} · {ui.dt_text(b['generated_at'], '%H:%M:%S')} 기준")
+        llm = f"Gemini {b.get('llm_model')} 연결됨" if b.get("llm") else "Gemini 키 없음 → 규칙 기반으로 답변"
+        st.caption(f"{b['agent']} · {b['engine']} · {ui.dt_text(b['generated_at'], '%H:%M:%S')} 기준 · 자연어 명령: {llm}")
+        with st.form("agent_ask", border=False):
+            q1, q2 = st.columns([4, 1], vertical_alignment="bottom")
+            q = q1.text_input("관제 명령", placeholder="예) 매칭 실패 보여줘 · 지연 차량 · 수급 현황 · 임계값 가이드 · 반경 70km로 바꿔",
+                              label_visibility="collapsed")
+            if q2.form_submit_button("AI 에게 묻기", icon=":material/send:", width="stretch") and q.strip():
+                st.session_state.agent_answer = ui.load(api.post, "/admin/agent/ask", {"text": q.strip()})
+        ans = st.session_state.get("agent_answer")
+        if ans:
+            note = f" · {ans['fallback']}" if ans.get("fallback") else ""
+            applied = " · 설정 변경 적용됨" if ans.get("applied") else ""
+            ui.html(f'<div class="ct-card" style="border-left:3px solid {ui.BRAND}"><div class="ct-muted" '
+                    f'style="font-size:12px">{ui.escape(ans["engine"])}{note}{applied}</div>'
+                    f'<div style="white-space:pre-wrap;margin-top:4px">{ui.escape(ans["answer"])}</div></div>')
+            if ans.get("hint"):
+                st.caption(ans["hint"])
         ui.html(f'<div class="ct-card"><b>{b["summary"]}</b></div>')
         for n, i in enumerate(b["insights"][:8]):
             label, tone = SEV[i["severity"]]
@@ -66,10 +83,11 @@ def control_map():
         {"label": "매칭 실패", "value": s["failed_matches"], "unit": "건", "alert": s["failed_matches"] > 0,
          "note": "제안할 기사 없음 → 조치 필요"},
         {"label": "이상 감지", "value": s["anomalies_open"], "unit": "건", "alert": s["anomalies_open"] > 0,
-         "note": "미해결" if s["anomalies_open"] else "정상"},
+         "note": f"경로 이탈 {s.get('deviated', 0)} · 지연 {s.get('delayed', 0)} · 서지 권역 {s.get('surge_regions', 0)}"},
     ])
 
     agent_panel()
+    tracking_market_panel()
 
     left, right = st.columns([2.1, 1], gap="large")
     with left:
@@ -111,6 +129,37 @@ def control_map():
                         st.rerun()
 
 
+def tracking_market_panel():
+    """실시간 추적(경로 이탈 디바운싱 · 지연 · 재위탁) + 권역 수급(D/S · 서지 · 날씨)."""
+    with st.expander("실시간 추적 · 권역 수급", icon=":material/satellite_alt:"):
+        t1, t2 = st.tabs(["GPS 추적 판정", "권역 수급 · 날씨"])
+        with t1:
+            tr = ui.load(api.get, "/admin/tracking")
+            r = tr["rule"]
+            st.caption(f"경로 거리 계산: {tr['engine']} · 기준 {r['deviation_km']:g}km 초과가 연속 {r['hits']}회면 경고 "
+                       f"(GPS 튐 오탐 방지) · 지연 {r['delay_alert_min']}분 초과 알림 · 배정 기사가 아닌 단말 핑은 거절")
+            if tr["runs"]:
+                st.dataframe(pd.DataFrame([{
+                    "화물": x["order_id"], "기사": f"{x['driver']} · {x['plate']}", "GPS": "수신 중" if x["live"] else "끊김",
+                    "핑": x["pings"], "경로까지(km)": x["dist_km"], "연속 이탈": x["off_count"], "이탈 경고": x["alerts"],
+                    "지연(분)": x["delay_minutes"], "재위탁 의심 핑": x["foreign_pings"],
+                } for x in tr["runs"]]), hide_index=True, width="stretch", column_config={
+                    "경로까지(km)": st.column_config.NumberColumn(format="%.2f"),
+                    "연속 이탈": st.column_config.ProgressColumn(min_value=0, max_value=r["hits"], format="%d회")})
+            else:
+                st.info("운행 중인 차량이 없습니다.")
+        with t2:
+            mk = ui.load(api.get, "/pricing/market")
+            st.caption("수요 = 매칭 대기 화물 + 시간대별 포아송 가상 콜 · 공급 = 빈 기사 + 권역 기본 공차 · "
+                       "D/S 1.5 초과 시 서지(+10%~+30%) · 날씨는 확률 분포 모의(비 +15% · 폭설 +30%)")
+            st.dataframe(pd.DataFrame([{
+                "권역": m["region"], "수요": m["demand"], "공급": m["supply"], "D/S": m["ds_ratio"],
+                "서지": f"+{m['surge']:.0%}" if m["surge"] else "-", "날씨": m["weather"]["label"],
+                "러시아워": "●" if m["rush_hour"] else "",
+            } for m in mk]), hide_index=True, width="stretch", column_config={
+                "D/S": st.column_config.ProgressColumn(min_value=0, max_value=4, format="%.2f")})
+
+
 @st.fragment(run_every="3s")
 def offers_list():
     try:
@@ -130,7 +179,8 @@ def offers_list():
         rows += (f'<div class="ct-item"><div class="ct-row"><span class="ct-mono">{o["id"]}</span>'
                  f'{ui.pill(f"{left}초 남음", "red" if left <= 15 else "blue")}</div>'
                  f'<div class="ct-strong" style="margin-top:4px">{o["title"]}</div>'
-                 f'<div class="ct-muted">→ {m["driver"]["name"]} 기사 · {m["driver"]["truck_type"]} · 상차 {m["pickup_km"]:.0f}km'
+                 f'<div class="ct-muted">→ {m["driver"]["name"]} 기사 ({ui.stars(m["driver"].get("rating"), None, "평가 없음")}) · '
+                 f'{m["driver"]["truck_type"]} · 상차 {m["pickup_km"]:.0f}km'
                  f' · 적재율 {util} · 점수 {m["score"] * 100:.0f}</div></div>')
     ui.html(f'<div class="ct-card" style="padding:12px 16px">{rows}</div>')
 
@@ -276,10 +326,15 @@ def anomalies():
             f'<div class="ct-big" style="margin-top:4px">{r["text"]}</div>'
             f'<div class="ct-muted">{r["plate"]} · {r["driver"]} 차주 ({r["phone"]}) · {r["location"]}</div>'
             f'<div class="ct-muted">{r["detail"]}{temp}</div></div>')
+    b1, b2, _ = st.columns([1, 1, 2])
     if r["status"] == "UNSOLVED":
-        if st.button("조치 완료 처리", type="primary", icon=":material/task_alt:"):
+        if b1.button("조치 완료 처리", type="primary", icon=":material/task_alt:", width="stretch"):
             if ui.act(api.post, f"/admin/anomalies/{r['id']}/resolve", success=f"{r['id']} 조치 완료 처리했습니다."):
                 st.rerun()
+    if b2.button("AI 인시던트 리포트", icon=":material/summarize:", width="stretch"):
+        rep = ui.load(api.get, f"/admin/agent/incident/{r['id']}")
+        st.caption(f"{rep.get('engine', 'rule-based')}" + (f" · {rep['fallback']}" if rep.get("fallback") else ""))
+        st.code(rep["text"], language=None, wrap_lines=True)
 
 
 # ======================================================================= 매칭 분석
@@ -338,7 +393,8 @@ def engine_panel(e: dict | None):
                     f'규칙 {100 - e["ml_weight"] * 100:.0f}% + AI {e["ml_weight"] * 100:.0f}%</div>'
                     f'<div class="ct-strong" style="font-size:16px;margin:4px 0">{ml["model"]} · {auc}</div>'
                     f'<div class="ct-muted" style="font-size:12.5px">⚠ <b>{ml["data"]}</b>로 학습 '
-                    f'({ml.get("samples", 0):,}건, 검증 {ml.get("test", 0):,}건). 실운행 기록이 쌓이면 같은 피처로 재학습</div></div>')
+                    f'({ml.get("samples", 0):,}건, 검증 {ml.get("test", 0):,}건). 실운행 기록이 쌓이면 같은 피처로 재학습 · '
+                    f'<b>lgb_score ≥ {e.get("ml_threshold", 0.75):.2f}</b> 인 후보만 자동 제안</div></div>')
         with c3:
             if lr:
                 gain = lr["total"] - lr["greedy_total"]
@@ -353,7 +409,8 @@ def engine_panel(e: dict | None):
         imp = ml.get("importance") or {}
         if imp:
             label = {"pickup_km": "상차 거리", "util": "적재율", "fare_gap": "운임 vs 적정가", "trip_km": "운송 거리",
-                     "cold": "콜드체인", "urgent": "긴급", "accept_rate": "기사 수락률"}
+                     "cold": "콜드체인", "urgent": "긴급", "accept_rate": "기사 수락률", "cf_score": "권역 선호(cf)",
+                     "rating": "기사 평점", "rush_hour": "러시아워"}
             total = sum(imp.values()) or 1
             df = pd.DataFrame([{"피처": label.get(k, k), "중요도": v / total} for k, v in imp.items()])
             chart = alt.Chart(df).mark_bar(cornerRadiusEnd=4, color=ui.BRAND).encode(
@@ -361,6 +418,36 @@ def engine_panel(e: dict | None):
                 y=alt.Y("피처:N", sort="-x", title=None),
                 tooltip=[alt.Tooltip("피처:N"), alt.Tooltip("중요도:Q", format=".1%")])
             st.altair_chart(chart.properties(height=200), width="stretch")
+
+
+def metrics_panel(m: dict | None):
+    """실시간 매칭 메트릭스 (matching_metrics_logs) + AI 임계값 · 가중치 조절 가이드."""
+    if not m:
+        return
+    with st.expander(f"매칭 성능 로그 · 배정 라운드 {m['rounds']}회", icon=":material/speed:"):
+        p95 = m["dispatch_latency_p95_sec"]
+        ui.kpis([
+            {"label": "배차 지연 p95", "value": "-" if p95 is None else f"{p95:.2f}", "unit": "초",
+             "alert": p95 is not None and p95 >= m["target_p95_sec"], "note": f"목표 < {m['target_p95_sec']:.0f}초"},
+            {"label": "공차 거리 단축률", "value": "-" if m["empty_deadhead_km_reduction_pct"] is None
+             else f"{m['empty_deadhead_km_reduction_pct']:.1f}", "unit": "%", "note": "헝가리안 vs 그리디 평균 상차 거리"},
+            {"label": "거절률", "value": "-" if m["rejection_rate_pct"] is None else f"{m['rejection_rate_pct']:.1f}",
+             "unit": "%", "note": "거절 + 무응답 / 응답"},
+            {"label": "임계값 차단", "value": m["threshold_filtered"], "unit": "쌍",
+             "note": f"lgb_score < {m['ml_threshold']:.2f} → 자동 제안 안 함"},
+        ])
+        if m["recent"]:
+            st.dataframe(pd.DataFrame([{
+                "라운드": r["id"], "시각": ui.dt_text(r["at"], "%H:%M:%S"), "화물": r["orders"], "후보 기사": r["drivers"],
+                "배정": r["assigned"], "지연(ms)": r["latency_ms"], "헝가리안 상차(km)": r["hungarian_avg_km"],
+                "그리디 상차(km)": r["greedy_avg_km"], "단축률(%)": r["deadhead_reduction_pct"],
+                "임계값 차단": r["threshold_filtered"], "실패": r["failed"],
+            } for r in m["recent"]]), hide_index=True, width="stretch")
+        g = ui.load(api.get, "/admin/agent/tuning")
+        ui.html('<div class="ct-muted" style="font-size:12.5px;margin-top:6px"><b>AI 조절 가이드</b> (자동 적용하지 않음)'
+                + "".join(f'<div style="margin-top:3px">• {ui.escape(t["target"])}: {ui.escape(str(t["now"]))} → '
+                          f'<b>{ui.escape(str(t["suggest"]))}</b> — {ui.escape(t["why"])}</div>' for t in g["tips"])
+                + "</div>")
 
 
 def matching():
@@ -371,6 +458,7 @@ def matching():
                    f"수락 제한 {cfg['timeout_sec']}초 · 모든 값은 매칭 기록에서 계산")
     settings_panel(cfg)
     engine_panel(d.get("engine"))
+    metrics_panel(d.get("metrics"))
 
     def pct(v, digits=1):
         return "-" if v is None else f"{v:.{digits}f}"
@@ -424,9 +512,13 @@ def matching():
 
     ui.section("기사별 매칭 현황", "배정 건수 많은 순")
     st.dataframe(pd.DataFrame([{
-        "기사": r["name"], "차량": r["plate"], "차종": r["truck_type"], "현재": r["state"], "배정 건수": r["matched"],
+        "기사": r["name"], "차량": r["plate"], "차종": r["truck_type"],
+        "현재": "이용 제한" if r.get("blacklisted") else r["state"], "배정 건수": r["matched"],
+        "평점": r.get("rating"), "리뷰": r.get("reviews"),
         "평균 상차 거리": r["avg_pickup_km"], "받은 제안": r["offers"], "수락률": r["accept_rate"],
     } for r in d["drivers"]]), hide_index=True, width="stretch", column_config={
+        "평점": st.column_config.NumberColumn(format="★%.1f", help="화주 리뷰 평균 · 매칭 AI 피처"),
+        "리뷰": st.column_config.NumberColumn(format="%d건"),
         "배정 건수": st.column_config.NumberColumn(format="%d건"),
         "평균 상차 거리": st.column_config.NumberColumn(format="%.1fkm"),
         "받은 제안": st.column_config.NumberColumn(format="%d건"),

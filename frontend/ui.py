@@ -281,3 +281,15 @@ def act(fn, *args, success: str | None = None, **kwargs):
     if success:
         flash(success)
     return result if result is not None else True
+
+
+def stars(avg: float | None, count: int | None = None, empty: str = "평가 없음") -> str:
+    """평점 → '★4.5 (2건)' (평가가 없으면 empty)."""
+    if avg is None:
+        return empty
+    return f"★{avg:.1f}" + (f" ({count}건)" if count else "")
+
+
+def star_bar(n: int | None) -> str:
+    """별점 1~5 → '★★★★☆' (없으면 '평가 전')."""
+    return "평가 전" if not n else "★" * n + "☆" * (5 - n)

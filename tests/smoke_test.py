@@ -129,6 +129,12 @@ if target:
     if run["status"] == "ASSIGNED":
         run = call("POST", f"/driver/runs/{target}/start", driver)
     check("운행 시작", run["status"] == "IN_TRANSIT")
+    lon, lat = run["route"][1]
+    pong = call("POST", "/tracking/ping", driver, expect=202,
+                json={"order_id": target, "lat": lat, "lon": lon, "speed": 80})
+    check("GPS 핑 인입 (기사 토큰 · 배정 기사 대조)", pong["accepted"], pong["pipeline"])
+    check("토큰 없는 핑 거부", requests.post(API + "/tracking/ping", json={"order_id": target, "lat": lat, "lon": lon},
+                                         timeout=10).status_code == 401)
     done = call("POST", f"/driver/runs/{target}/complete", driver, json={"receiver": "홍길동"})
     check("하차 완료 · 전자인수증", done["status"] == "DELIVERED" and done["pod"]["hash"].startswith("0x"))
     call("POST", f"/driver/completed/{target}/invoice", driver, json={"extra_fee": 10_000, "toll_fee": 5_000})
@@ -139,6 +145,23 @@ if target:
     else:
         check("청구서 발송", True, f"화주 {owner} (데모 화주 계정이 아니라 승인은 생략)")
 
+    review = call("POST", "/reviews", shipper if owner == "삼성물류" else driver, expect=201,
+                  json={"order_id": target, "stars": 5, "tags": ["시간 엄수"] if owner == "삼성물류" else ["상하차 신속"]})
+    check("운송 완료 화물 상호 평가", review["stars"] == 5, review["id"])
+
+section("컴플라이언스 · 감사 로그")
+chk = call("GET", "/compliance/check", params={"biz_no": "123-45-67890", "plate": "부산 11가 2233"})
+check("사업자 Mod-10 · 번호판 사전 확인", not chk["business"]["ok"] and chk["plate"]["plate_type"] == "PRIVATE_WHITE",
+      f"{chk['business']['label']} · {chk['plate']['label']}")
+r = requests.post(API + "/auth/register", timeout=10, data={
+    "role": "shipper", "email": f"smoke{int(time.time())}@x.com", "password": "password1", "name": "스모크",
+    "company": "스모크물류", "biz_no": "123-45-67890"})  # 검증 숫자 오류 → 국세청 키 유무와 상관없이 거절
+check("가짜 사업자번호 가입 거절", r.status_code == 400, r.json().get("detail", "")[:60])
+v = call("GET", "/admin/audit/verify", admin)
+check("감사 로그 SHA-256 해시 체인 검증", v["ok"], f"{v['checked']}줄")
+rep = call("GET", "/admin/reputation", admin)
+check("평판 · 블랙리스트 보드", any(x["blacklisted"] for x in rep), f"제한 {sum(x['blacklisted'] for x in rep)}명")
+
 section("관제")
 s = call("GET", "/admin/summary", admin)
 check("관제 요약", s["vehicles"] > 0, f"차량 {s['vehicles']}대 · 매칭 진행 {s['matching']}건 · 실패 {s['failed_matches']}건")
@@ -147,5 +170,14 @@ paths = [v for v in fleet if v["path"]]
 check("운행 차량 도로 경로", paths and all(len(v["path"]) > 2 for v in paths), f"{len(paths)}대")
 stats = call("GET", "/admin/matching", admin)
 check("매칭 분석", stats["kpi"]["match_success_rate"] is not None, f"성공률 {stats['kpi']['match_success_rate']}%")
+mm = call("GET", "/admin/matching/metrics", admin)
+check("매칭 메트릭스 (p95 · 공차 단축 · 거절률)", mm["rounds"] > 0 and mm["ml_threshold"] == 0.75,
+      f"p95 {mm['dispatch_latency_p95_sec']}초 · 라운드 {mm['rounds']}")
+mk = call("GET", "/pricing/market", admin)
+check("권역 수급 · 날씨", len(mk) >= 10 and all("ds_ratio" in x for x in mk))
+tr = call("GET", "/admin/tracking", admin)
+check("실시간 추적 판정", "runs" in tr, tr["engine"])
+ans = call("POST", "/admin/agent/ask", admin, json={"text": "매칭 실패 보여줘"})
+check("AI 관제 자연어 명령", bool(ans["answer"]), ans["engine"])
 
 finish()

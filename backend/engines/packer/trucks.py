@@ -30,7 +30,8 @@ class Container:
 
 
 TRUCKS: dict[str, Container] = {c.name: c for c in [
-    Container("1톤 카고", 2850, 1600, 1700, 1_000, side_access=True),
+    Container("1톤 카고", 2850, 1600, 1700, 1_000, side_access=True),     # 포터급 적재함 약 2.8m × 1.6m
+    Container("2.5톤 카고", 4300, 2000, 1900, 2_500, side_access=True),   # 마이티급
     Container("5톤 윙바디", 6200, 2350, 2400, 5_000, side_access=True),
     Container("5톤 냉동탑차", 5900, 2200, 2150, 4_500, refrigerated=True),
     Container("11톤 탑차", 9100, 2350, 2500, 11_000),

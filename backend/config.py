@@ -22,6 +22,16 @@ class Settings(BaseSettings):
     admin_approval_code: str = "CT-ADMIN-2026"   # 관제자 회원가입 승인 코드
     time_scale: int = 20                          # 시연용 배속: 실제 1초 = 운행 20초
     sim_api_key: str = "sim-dev-key"              # 가상 기사 시뮬레이터 전용 내부 API 키 (X-Sim-Key)
+    # ---- 외부 연동 (없으면 모의 · 규칙 기반으로 동작) ----
+    nts_api_key: str = ""                         # 국세청 사업자 진위확인 (data.go.kr 인증키 Decoding)
+    gemini_api_key: str = ""                      # Google Gemini (AI 관제 자연어 명령)
+    gemini_model: str = "gemini-2.5-flash"
+    # ---- 엔진 기준값 ----
+    ml_threshold: float = 0.75                    # LightGBM 수락 예측 보수적 임계값 (미만이면 자동 제안 안 함)
+    safety_margin: float = 0.10                   # 적재 안전율: 부피 · 중량 90% 초과 시 차단 (85% 초과 경고)
+    deviation_km: float = 1.0                     # 경로 이탈 판정 거리 (계획 경로에서 1km 이상)
+    deviation_hits: int = 3                       # 연속 몇 번 벗어나야 경고할지 (디바운싱)
+    delay_alert_min: int = 30                     # 계획 ETA 대비 지연 알림 기준 (분)
 
 
 settings = Settings()
@@ -37,4 +47,5 @@ DEFAULT_SETTINGS = {
     "w_dist": 0.6,       # 점수 가중치: 거리 (적재율 = 1 − 거리)
 }
 ML_WEIGHT = 0.3  # 최종 점수 = 규칙 점수(거리 · 적재율) 70% + LightGBM 수락 예측 30%
+ML_THRESHOLD = settings.ml_threshold  # 수락 예측이 이 값 미만인 기사에게는 자동 제안을 보내지 않는다
 SETTING_LABEL = {"radius_km": ("탐색 반경", "km"), "timeout_sec": ("수락 제한시간", "초"), "w_dist": ("거리 가중치", "")}

@@ -4,8 +4,8 @@
   "samples": 8000,
   "train": 6400,
   "test": 1600,
-  "accept_ratio": 0.745,
-  "auc": 0.857,
+  "accept_ratio": 0.787,
+  "auc": 0.859,
   "features": [
     "pickup_km",
     "util",
@@ -13,15 +13,21 @@
     "trip_km",
     "cold",
     "urgent",
-    "accept_rate"
+    "accept_rate",
+    "cf_score",
+    "rating",
+    "rush_hour"
   ],
   "importance": {
-    "pickup_km": 16632,
-    "util": 1316,
-    "fare_gap": 4496,
-    "trip_km": 2181,
-    "cold": 185,
-    "urgent": 147,
-    "accept_rate": 1798
+    "pickup_km": 17018,
+    "util": 1519,
+    "fare_gap": 3652,
+    "trip_km": 1549,
+    "cold": 122,
+    "urgent": 158,
+    "accept_rate": 1092,
+    "cf_score": 1910,
+    "rating": 1426,
+    "rush_hour": 528
   }
 }

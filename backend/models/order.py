@@ -29,7 +29,8 @@ STATUS_LABEL = {
     "SETTLED": "정산완료",
 }
 BILLING_LABEL = {"UNBILLED": "청구 필요", "REQUESTED": "승인 대기", "PAID": "입금 완료", "REFUNDED": "결제 취소"}
-ANOMALY_TYPE_LABEL = {"COLD": "온도 이상", "STAGNATION": "장시간 정체", "DEVIATION": "경로 이탈"}
+ANOMALY_TYPE_LABEL = {"COLD": "온도 이상", "STAGNATION": "장시간 정체", "DEVIATION": "경로 이탈",
+                      "DELAY": "도착 지연", "SUSPICIOUS_REOUTSOURCING": "불법 재위탁 의심"}
 MATCH_EVENT_LABEL = {
     "offered": "배차 제안", "accepted": "기사 수락 · 배차 확정", "declined": "기사 거절",
     "expired": "응답 없음 (시간 초과)", "assigned": "관제 직접 배차", "reposted": "보조금 재공고",
@@ -75,16 +76,9 @@ class AnomalyRow(Base):
     data: Mapped[dict] = mapped_column(JSONB)
 
 
-class AuditRow(Base):
-    """감사 로그 (FSM 상태 전이 · 청구 · 결제 · 환불). 추가만 하고 고치지 않는다."""
-    __tablename__ = "audit_logs"
+from .audit import AuditRow  # noqa: E402 — 감사 로그 테이블은 models/audit.py (해시 체인), 예전 import 경로 유지
 
-    id: Mapped[str] = mapped_column(String(20), primary_key=True)
-    at: Mapped[datetime] = mapped_column(DateTime, index=True)
-    order_id: Mapped[str] = mapped_column(String(30), index=True)
-    event: Mapped[str] = mapped_column(String(12))
-    actor: Mapped[str] = mapped_column(String(60))
-    data: Mapped[dict] = mapped_column(JSONB)
+__all__ = ["OrderRow", "AnomalyRow", "AuditRow", "AppStateRow"]
 
 
 class AppStateRow(Base):

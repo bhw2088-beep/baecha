@@ -8,6 +8,9 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)  # 수정본 폴더 → backend 패키지를 import 할 수 있게
 
 os.environ.setdefault("BAECHA_DB", "0")  # 테스트는 메모리 저장소만 사용 (실제 DB 데이터를 건드리지 않음)
+# 테스트는 항상 모의 판정 · 규칙 기반으로 (.env 에 실제 국세청 · Gemini 키가 있어도 외부 API 를 부르지 않음)
+os.environ["NTS_API_KEY"] = ""
+os.environ["GEMINI_API_KEY"] = ""
 
 _result = {"pass": 0, "fail": 0}
 

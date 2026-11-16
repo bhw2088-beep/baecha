@@ -75,20 +75,7 @@ class OrderMixin:
         at = o.get("gps_at")
         return at is not None and (datetime.now() - at).total_seconds() < self.GPS_FRESH_SEC
 
-    def apply_gps(self, msg: dict) -> bool:
-        """GPS 한 건 반영: 진행률(도로 경로 위 위치) · 속도. 운행 중이 아닌 화물이면 무시."""
-        o = self.orders.get(msg.get("order_id"))
-        if not o or o["status"] != "IN_TRANSIT":
-            return False
-        if self._open_anomaly(o["id"], "STAGNATION"):
-            o["speed"] = 0
-        else:
-            o["progress"] = max(o["progress"], min(97.0, float(msg["progress"])))
-            o["speed"] = int(float(msg["speed"]))
-        o["gps"] = {"lat": float(msg["lat"]), "lon": float(msg["lon"]), "ts": msg.get("ts")}
-        o["gps_at"] = datetime.now()
-        self.gps_received = getattr(self, "gps_received", 0) + 1
-        return True
+    # GPS 한 건 반영(apply_gps · ingest_ping)은 services/tracking_service.py (경로 이탈 · 지연 · 재위탁 판정)
 
     def sim_runs(self) -> list[dict]:
         """가상 기사 시뮬레이터에게 줄 운행 목록 (도로 경로 · 현재 진행률 · 정체 여부)."""
@@ -120,6 +107,9 @@ class OrderMixin:
             return path[0]
         if o["status"] in DONE:
             return path[-1]
+        g = o.get("gps")
+        if g and self._gps_live(o):
+            return g["lat"], g["lon"]  # 실시간 GPS (지터 · 이탈 포함 실제 보고 위치)
         p, i = geo.along(path, o["progress"] / 100)  # 도로를 따라 진행률만큼 이동
         return geo.offset_perpendicular(path[i], path[i + 1], p, 0.09) if o["deviated"] else p
 
@@ -144,7 +134,9 @@ class OrderMixin:
         d = self.drivers.get(driver_id) if driver_id else None
         if not d:
             return None
-        return {k: d[k] for k in ("id", "name", "phone", "plate", "truck_type")}
+        r = self.driver_rating(driver_id)
+        return {**{k: d[k] for k in ("id", "name", "phone", "plate", "truck_type")},
+                "rating": r["avg"], "reviews": r["count"]}  # 기사 평점 (화주 리뷰)
 
     def order_view(self, o: dict) -> dict:
         minutes, clock = self._eta(o)
@@ -161,6 +153,7 @@ class OrderMixin:
             "status": o["status"], "status_label": STATUS_LABEL[o["status"]],
             "anomaly": {"id": anomaly["id"], "type": anomaly["type"], "text": anomaly["text"]} if anomaly else None,
             "shipper": self.shippers.get(o["shipper_id"], {}).get("name", "-"),
+            "shipper_rating": {k: v for k, v in self.shipper_rating(o["shipper_id"]).items() if k in ("avg", "count")},
             "driver": self.driver_brief(o["driver_id"]),
             "progress": round(o["progress"], 1), "speed": o["speed"],
             "eta_minutes": minutes, "eta_clock": clock, "delay_minutes": o["delay_minutes"],
@@ -171,7 +164,12 @@ class OrderMixin:
             "wait_seconds": int(wait) if wait is not None else None,
             "billing": o["billing"], "billing_label": BILLING_LABEL.get(o["billing"], "-"),
             "payment": o.get("payment"),  # 모의 PG 결제 (거래번호 · 승인번호 · 상태)
-            "pod": o["pod"], "lat": lat, "lon": lon,
+            "pod": o["pod"], "lat": lat, "lon": lon, "deviated": o["deviated"],
+            "gps": {k: (o.get("gps") or {}).get(k) for k in ("dist_km", "off_count", "source")}
+            if o.get("gps") else None,
+            "required_tonnage": o.get("required_tonnage"),
+            "review": {k: (self.reviews.get(f"REV-{o['id']}-{r}") or {}).get("stars") for k, r in
+                       (("by_shipper", "S"), ("by_driver", "D"))} if o["status"] in DONE else None,
             "packing": self._packing_summary(o),
             "matching": self._matching_view(o),
             "fare_est": self._fare_est(o),
@@ -354,6 +352,9 @@ class OrderMixin:
             **{k: d[k] for k in ("id", "name", "phone", "plate", "truck_type", "month_runs")},
             "location": d["location"], "state": state if d.get("approved", True) else "가입 승인 대기",
             "approved": d.get("approved", True), "approval": d.get("approval"),
+            "plate_type": d.get("plate_type"), "tonnage": d.get("tonnage"), "rating": self.driver_rating(driver_id),
+            "blacklisted": bool(d.get("blacklisted")), "blacklist": d.get("blacklist"),
+            "dispatchable": self.driver_dispatchable(d),
             "run": self.order_view(run) if run else None,
             "offer_id": offer["id"] if offer else None,
             **self._driver_offer_stats(driver_id),
@@ -455,6 +456,10 @@ class OrderMixin:
             "failed_matches": sum(1 for o in matching if o["match_fail"]),
             "gps_live": sum(1 for o in self.orders.values() if o["status"] == "IN_TRANSIT" and self._gps_live(o)),
             "gps_received": getattr(self, "gps_received", 0),
+            "deviated": sum(1 for o in self.orders.values() if o["status"] == "IN_TRANSIT" and o["deviated"]),
+            "delayed": sum(1 for o in self.orders.values() if o["status"] == "IN_TRANSIT" and o["delay_minutes"] > 30),
+            "blacklisted": sum(1 for d in self.drivers.values() if d.get("blacklisted")),
+            "surge_regions": sum(1 for m in self.market_board() if m["surge_on"]),
         }
 
     def anomaly_view(self, a: dict) -> dict:
@@ -488,4 +493,10 @@ class OrderMixin:
             o["temp_now"] = o["temp_set"]
         if o and a["type"] == "DEVIATION":
             o["deviated"] = False
+            st = self.tracking.get(o["id"])
+            if st:
+                st["off"] = 0
+        from ..engines.fsm.order_fsm import audit_entry
+        audit_entry(self, o, "tracking", "resolve", a["type"], "RESOLVED", "관제",
+                    note=f"{a['id']} {a['text']} 조치 완료", order_id=a["order_id"] or "-")
         return self.anomaly_view(a)

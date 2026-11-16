@@ -1,10 +1,15 @@
 """관제 · 추적 API: 기사 운행(상차/하차 + e-POD) · 전국 차량 위치 · 관제 현황 · 이상 감지."""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from ...config import settings
 from ...core.database import store
+from ...core.errors import ApiError
+from ...core.redis_client import available as redis_available, get_redis
 from ...core.security import require
+from ...schemas.matching_schema import AskIn, PingBatchIn, PingIn
 from ...schemas.order_schema import CompleteIn
 from ...workers import gps_stream_worker
 
@@ -74,6 +79,77 @@ async def sim_runs():
     return store.sim_runs()
 
 
+# ------------------------------------------------------------------ 실시간 GPS 핑 (Phase 3)
+async def _enqueue(msgs: list[dict]) -> bool:
+    """Redis Streams 로 보낸다 (XADD). Redis 가 없으면(로컬 메모리 실행) 바로 처리한다."""
+    if redis_available():
+        def xadd():
+            pipe = get_redis().pipeline()
+            for m in msgs:
+                pipe.xadd(gps_stream_worker.STREAM, {k: str(v) for k, v in m.items() if v is not None},
+                          maxlen=gps_stream_worker.MAXLEN, approximate=True)
+            pipe.execute()
+        try:
+            await asyncio.to_thread(xadd)
+            return True
+        except Exception:  # noqa: BLE001 — Redis 일시 장애 → 바로 처리
+            pass
+    for m in msgs:
+        store.ingest_ping(m)
+    return False
+
+
+def _ping_msg(body: PingIn, driver_id: str, source: str) -> dict:
+    return {"order_id": body.order_id, "driver_id": driver_id, "lat": f"{body.lat:.6f}", "lon": f"{body.lon:.6f}",
+            "speed": int(body.speed), "ts": body.ts, "source": source}
+
+
+@router.post("/tracking/ping", status_code=202)
+async def ping(body: PingIn, authorization: str = Header(default=""), x_sim_key: str = Header(default="")):
+    """GPS 핑 인입: 배정 기사 대조(불법 재위탁 방지) → Redis Streams XADD → 워커가 이탈 · 지연 판정.
+    기사 앱: Authorization: Bearer <차주 토큰>  /  가상 기사: X-Sim-Key + driver_id."""
+    if x_sim_key:
+        if x_sim_key != settings.sim_api_key:
+            raise HTTPException(status_code=401, detail="시뮬레이터 키가 올바르지 않습니다.")
+        driver_id, source = body.driver_id, "virtual_driver"
+    else:
+        user = store.user_by_token(authorization.removeprefix("Bearer ").strip())
+        if not user or user["role"] != "driver":
+            raise HTTPException(status_code=401, detail="차주 로그인이 필요합니다.")
+        driver_id, source = user["org_id"], "driver_app"
+    store.check_ping(body.order_id, driver_id, source)
+    queued = await _enqueue([_ping_msg(body, driver_id, source)])
+    return {"accepted": True, "queued": queued, "pipeline": "Redis Streams" if queued else "직접 처리 (Redis 없음)"}
+
+
+@router.post("/tracking/ping/batch", dependencies=[Depends(_sim_key)],
+             include_in_schema=False)
+async def ping_batch(body: PingBatchIn):
+    """가상 기사 시뮬레이터 전용: 여러 운행의 핑을 한 번에. 배정 기사가 아닌 핑은 거절 목록으로."""
+    ok, rejected = [], []
+    for p in body.pings:
+        try:
+            store.check_ping(p.order_id, p.driver_id, "virtual_driver")
+            ok.append(_ping_msg(p, p.driver_id, "virtual_driver"))
+        except ApiError as e:
+            rejected.append({"order_id": p.order_id, "status": e.status, "detail": e.detail})
+    queued = await _enqueue(ok) if ok else False
+    return {"accepted": len(ok), "rejected": rejected, "queued": queued}
+
+
+@router.get("/admin/tracking", dependencies=[Admin])
+async def tracking_status():
+    """운행별 경로 이탈 거리 · 연속 이탈 횟수(디바운싱) · 지연 · 재위탁 의심 핑."""
+    return store.tracking_status()
+
+
+@router.get("/admin/audit/verify", dependencies=[Admin])
+async def audit_verify():
+    """감사 로그 SHA-256 해시 체인 위변조 검사."""
+    from ...engines.fsm.order_fsm import verify_chain
+    return verify_chain(store.audit)
+
+
 @router.get("/admin/gps", dependencies=[Admin])
 async def gps_status():
     """GPS 수신 파이프라인 상태 (Redis Streams 소비 건수 등)."""
@@ -82,6 +158,31 @@ async def gps_status():
 
 @router.get("/admin/agent/briefing", dependencies=[Admin])
 async def agent_briefing():
-    """규칙 기반 AI 관제 보조: 매칭 실패 · 운행 이상 · 지연 · 정산 · 가입 심사를 점검해 조치와 안내 문구 초안을 제안."""
+    """규칙 기반 AI 관제 보조: 매칭 실패 · 운행 이상 · 지연 · 정산 · 가입 심사 · 평판 · 수급을 점검해 조치와 안내 문구 초안을 제안."""
+    from ...engines.ai import gemini_agent, rule_agent
+    return {**rule_agent.briefing(store), "llm": gemini_agent.available(settings), "llm_model": settings.gemini_model}
+
+
+@router.post("/admin/agent/ask", dependencies=[Admin])
+async def agent_ask(body: AskIn):
+    """자연어 관제 명령 (Gemini Function Calling · 키가 없으면 규칙 기반). 설정 변경은 서버가 검증 후 적용."""
+    from ...engines.ai import gemini_agent, rule_agent
+    if not gemini_agent.available(settings):
+        return {**rule_agent.handle_command(store, body.text), "fallback": "GEMINI_API_KEY 없음 → 규칙 기반"}
+    res = await asyncio.to_thread(gemini_agent.ask, store, settings, body.text)  # 네트워크 대기는 스레드에서
+    res["applied"] = gemini_agent.apply_pending(store, res.pop("pending", []))
+    return res
+
+
+@router.get("/admin/agent/incident/{anomaly_id}", dependencies=[Admin])
+async def agent_incident(anomaly_id: str):
+    """이상 감지 한 건 → 액션 아이템 형태 인시던트 리포트 (Gemini · 없으면 규칙)."""
+    from ...engines.ai import gemini_agent
+    return await asyncio.to_thread(gemini_agent.incident_report, store, settings, anomaly_id)
+
+
+@router.get("/admin/agent/tuning", dependencies=[Admin])
+async def agent_tuning():
+    """거절률 · 평점 · 수급 기반 LightGBM 임계값 · 가중치 조절 가이드 (자동 적용 안 함)."""
     from ...engines.ai import rule_agent
-    return rule_agent.briefing(store)
+    return rule_agent.tuning_guide(store)

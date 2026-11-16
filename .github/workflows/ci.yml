@@ -1,5 +1,6 @@
 # 배차의 민족 CI
-#  - lint-test   : 파이썬 3.12 · 3.14 에서 pyflakes 검사 + 서버 없이 도는 점검(3D 적재 · 매칭 · FSM/모의 PG)
+#  - lint-test   : 파이썬 3.12 · 3.14 에서 pyflakes 검사 + 서버 없이 도는 점검(3D 적재 · 매칭 · FSM/모의 PG ·
+#                  컴플라이언스 · 운임/수급/안전율 · 추적/해시 체인/리뷰 · 마이크로 배치 스트레스)
 #  - integration : docker compose 로 전체(DB · Redis · 백엔드 · Celery 워커 · 시뮬레이터)를 띄우고 API 전체 흐름 점검
 # 이 프로젝트 폴더(수정본)가 저장소 최상위라고 가정한다.
 name: CI
@@ -51,8 +52,10 @@ jobs:
             sleep 2
           done
           curl -sf http://localhost:8000/api/v1/health
-      - name: API 전체 흐름 점검 (등록 → 매칭 → 운행 → 청구 → 모의 결제 · Celery)
+      - name: API 전체 흐름 점검 (등록 → 매칭 → 운행 → 청구 → 모의 결제 · Celery · 핑 · 리뷰 · 해시 체인)
         run: docker compose exec -T backend python tests/smoke_test.py
+      - name: 운영용 compose 파일 문법 검사
+        run: docker compose -f docker-compose.prod.yml config -q
       - name: 실패 시 로그
         if: failure()
         run: docker compose logs --tail 200

@@ -11,6 +11,7 @@ import importlib
 
 import api
 import loading_guide
+import reviews_ui
 import ui
 
 # 숫자로 시작하는 페이지 모듈은 일반 import 문으로 부를 수 없어 importlib 로 가져온다
@@ -21,14 +22,24 @@ EVENT_TONE = {"accepted": "green", "picked": "green", "assigned": "brand", "decl
 
 
 def _profile_header(p: dict):
-    state_tone = {"공차 대기": "green", "배차 제안 도착": "brand", "상차지 이동": "amber", "운행중": "blue"}[p["state"]]
+    state_tone = {"공차 대기": "green", "배차 제안 도착": "brand", "상차지 이동": "amber", "운행중": "blue"}.get(p["state"], "gray")
     rate = f'{p["accept_rate"]}%' if p["accept_rate"] is not None else "-"
+    r = p.get("rating") or {}
+    star = f'{r["avg"]:.2f}★ ({r["count"]}건)' if r.get("avg") is not None else "평가 없음"
+    plate_ok = p.get("plate_type", "COMMERCIAL_YELLOW") == "COMMERCIAL_YELLOW"
+    badges = (ui.pill("사업용 노란 번호판" if plate_ok else "자가용 번호판 · 배차 불가", "green" if plate_ok else "red")
+              + (" " + ui.pill("이용 제한 중", "red") if p.get("blacklisted") else ""))
     ui.html(f'<div class="ct-head"><div><div class="ct-eyebrow">DRIVER · {p["plate"]}</div>'
             f'<div class="ct-title">{p["name"]} 차주님</div>'
-            f'<div class="ct-desc">{p["truck_type"]} · 현재 위치 {p["location"]}</div></div>'
+            f'<div class="ct-desc">{p["truck_type"]} · 현재 위치 {p["location"]}</div>'
+            f'<div style="margin-top:6px">{badges}</div></div>'
             f'<div style="text-align:right">{ui.pill(p["state"], state_tone)}'
             f'<div class="ct-muted" style="margin-top:6px">배차 제안 수락률 <b class="ct-strong">{rate}</b>'
-            f' · 받은 제안 {p["offers"]}건</div></div></div>')
+            f' · 받은 제안 {p["offers"]}건 · 평점 <b class="ct-strong">{star}</b></div></div></div>')
+    if p.get("blacklisted"):
+        b = p.get("blacklist") or {}
+        st.error(f"관제 이용 제한 중이라 배차를 받을 수 없습니다 · 사유: {b.get('reason', '-')} · 문의: 관제센터",
+                 icon=":material/block:")
 
 
 # ======================================================================= 배차 제안 · 내 운행
@@ -129,7 +140,9 @@ def _offer_card(o: dict):
             f'<div class="ct-row" style="align-items:flex-start"><div style="min-width:0">'
             f'<div style="display:flex;gap:6px;flex-wrap:wrap">{" ".join(tags)}</div>'
             f'<div class="ct-big" style="margin-top:8px">{o["title"]}</div>'
-            f'<div class="ct-muted">{o["id"]} · {o["shipper"]} · 요청 {o["truck_type"]}</div></div>'
+            f'<div class="ct-muted">{o["id"]} · {o["shipper"]} '
+            f'<span style="color:#F79009">{ui.stars(o["shipper_rating"]["avg"], o["shipper_rating"]["count"], "화주 평가 없음")}</span>'
+            f' · 요청 {o["truck_type"]}</div></div>'
             f'<div style="text-align:right;flex-shrink:0"><div class="ct-muted" style="font-size:11.5px">응답 남은 시간</div>'
             f'<div style="font-size:30px;font-weight:800;color:{tone};font-variant-numeric:tabular-nums">{left}초</div></div></div>'
             f'<div class="ct-track" style="margin:8px 0 2px"><div class="fill" style="width:{pct:.0f}%;background:{tone}"></div></div>'
@@ -207,7 +220,9 @@ def _rec_card(o: dict):
             f'<div class="ct-row" style="align-items:flex-start"><div style="min-width:0">'
             f'<div style="display:flex;gap:6px;flex-wrap:wrap;min-height:22px">{" ".join(tags)}</div>'
             f'<div class="ct-strong" style="font-size:16px;margin-top:8px">{o["title"]}</div>'
-            f'<div class="ct-muted">{o["id"]} · {o["shipper"]} · 대기 {ui.duration(o["wait_seconds"])}</div></div>'
+            f'<div class="ct-muted">{o["id"]} · {o["shipper"]} '
+            f'<span style="color:#F79009">{ui.stars(o["shipper_rating"]["avg"], o["shipper_rating"]["count"], "화주 평가 없음")}</span>'
+            f' · 대기 {ui.duration(o["wait_seconds"])}</div></div>'
             f'<div style="text-align:right;flex-shrink:0"><div class="ct-muted" style="font-size:11.5px">매칭 점수</div>'
             f'<div style="font-size:24px;font-weight:800;color:{score_color}">{r["score"] * 100:.0f}</div></div></div>'
             + ui.route_bar(o["origin"], o["destination"], 0, f"상차지까지 {r['pickup_km']:.0f}km",
@@ -301,6 +316,7 @@ def earnings():
         {"label": "전자인수증 발급률", "value": p["pod_rate"], "unit": "%", "note": "서명 완료 · 해시 등록"},
         {"label": "평균 정산 소요", "value": p["avg_settle_days"] or "-", "unit": "일", "note": "청구 → 입금"},
     ])
+    reviews_ui.pending_reviews_panel("driver")
 
     jobs = ui.load(api.get, "/driver/completed")
     ui.section("운송 완료 내역", "완료 건의 인수증을 확인하고 화주에게 운송비 청구서를 보내세요")
@@ -310,6 +326,7 @@ def earnings():
     df = pd.DataFrame([{
         "화물 ID": j["id"], "완료일": ui.dt_text(j["delivered_at"], "%Y.%m.%d"), "화물": j["title"],
         "화주": j["shipper"], "구간": f"{j['origin'].split()[0]} → {j['destination'].split()[0]}",
+        "내 평가": ui.star_bar((j.get("review") or {}).get("by_driver")),
         "기본 운임": j["fare"], "추가·통행료": j["extra_fee"] + j["toll_fee"], "합계": j["total_fee"],
         "청구 상태": j["billing_label"],
     } for j in jobs])

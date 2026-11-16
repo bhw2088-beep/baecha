@@ -17,6 +17,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 os.environ.setdefault("BAECHA_DB", "0")
+os.environ["NTS_API_KEY"] = ""   # 테스트는 외부 API(국세청 · Gemini)를 부르지 않는다
+os.environ["GEMINI_API_KEY"] = ""
 
 
 @pytest.fixture(scope="session")

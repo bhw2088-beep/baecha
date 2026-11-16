@@ -26,6 +26,8 @@ from ..services.auth_service import AuthMixin
 from ..services.billing_service import BillingMixin
 from ..services.matching_service import MatchingMixin
 from ..services.order_service import OrderMixin
+from ..services.review_service import ReviewMixin
+from ..services.tracking_service import TrackingMixin
 from . import seed
 
 # ------------------------------------------------------------------ PostgreSQL 연결
@@ -109,13 +111,17 @@ class DbSync:
 
     def create_tables(self) -> bool:
         from ..models import Base
-        from ..models import order as _order, user as _user
-        assert _order.OrderRow and _user.UserRow  # import 만으로 Base.metadata 에 테이블이 등록된다
+        from ..models import audit as _audit, metrics as _metrics, order as _order, review as _review, user as _user
+        assert _order.OrderRow and _user.UserRow and _review.ReviewRow and _audit.AuditRow  # 테이블 등록
+        assert _metrics.MatchingMetricRow
         try:
+            from sqlalchemy import text
             with get_engine().begin() as conn:
-                from sqlalchemy import text
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
             Base.metadata.create_all(get_engine())
+            with get_engine().begin() as conn:  # 예전 버전 DB 에 해시 체인 컬럼 추가 (있으면 그대로)
+                conn.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS previous_hash VARCHAR(64)"))
+                conn.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS current_hash VARCHAR(64)"))
             return True
         except Exception as e:  # noqa: BLE001
             self.error = f"{type(e).__name__}: {str(e).splitlines()[0][:160]}"
@@ -124,7 +130,10 @@ class DbSync:
     # ---- 메모리 → 행
     @staticmethod
     def _rows(store: "Store") -> dict[str, list[dict]]:
-        from ..models.order import AnomalyRow, AppStateRow, AuditRow, OrderRow
+        from ..models.audit import AuditRow
+        from ..models.order import AnomalyRow, AppStateRow, OrderRow
+        from ..models.metrics import MatchingMetricRow
+        from ..models.review import ReviewRow
         from ..models.user import AuthTokenRow, DriverRow, ShipperRow, UserRow
         orders = []
         for o in store.orders.values():
@@ -148,7 +157,14 @@ class DbSync:
             AnomalyRow: [{"id": a["id"], "order_id": a["order_id"], "driver_id": a["driver_id"], "type": a["type"],
                           "status": a["status"], "at": a["at"], "data": _enc(a)} for a in store.anomalies.values()],
             AuditRow: [{"id": e["id"], "at": e["at"], "order_id": e["order_id"], "event": e["event"],
-                        "actor": e["actor"], "data": _enc(e)} for e in store.audit],
+                        "actor": e["actor"][:60], "previous_hash": e.get("previous_hash"),
+                        "current_hash": e.get("current_hash"), "data": _enc(e)} for e in store.audit],
+            ReviewRow: [{"id": r["id"], "order_id": r["order_id"], "from_role": r["from_role"],
+                         "to_role": r["to_role"], "to_id": r["to_id"], "stars": r["stars"], "at": r["at"],
+                         "data": _enc(r)} for r in store.reviews.values()],
+            MatchingMetricRow: [{"id": e["id"], "at": e["at"], "orders": e["orders"], "assigned": e["assigned"],
+                                 "latency_ms": e["latency_ms"], "deadhead_reduction_pct": e["deadhead_reduction_pct"],
+                                 "data": _enc(e)} for e in store.metrics_log],
             AppStateRow: [{"key": "settings", "value": _enc(store.settings)},
                           {"key": "settings_log", "value": {"items": _enc(store.settings_log)}},
                           {"key": "seq", "value": dict(store._seq)}],
@@ -198,7 +214,10 @@ class DbSync:
         """테이블에 화물이 있으면 메모리로 불러온다. 없으면 False (→ 시드 데이터로 시작)."""
         from sqlalchemy import select
 
-        from ..models.order import AnomalyRow, AppStateRow, AuditRow, OrderRow
+        from ..models.audit import AuditRow
+        from ..models.order import AnomalyRow, AppStateRow, OrderRow
+        from ..models.metrics import MatchingMetricRow
+        from ..models.review import ReviewRow
         from ..models.user import AuthTokenRow, DriverRow, ShipperRow, UserRow
         with SessionLocal() as s:
             if s.execute(select(OrderRow.id).limit(1)).first() is None:
@@ -210,6 +229,8 @@ class DbSync:
             store.orders = {r.id: _dec(r.data) for r in s.scalars(select(OrderRow).order_by(OrderRow.created_at))}
             store.anomalies = {r.id: _dec(r.data) for r in s.scalars(select(AnomalyRow))}
             store.audit = [_dec(r.data) for r in s.scalars(select(AuditRow).order_by(AuditRow.id))]
+            store.reviews = {r.id: _dec(r.data) for r in s.scalars(select(ReviewRow))}
+            store.metrics_log = [_dec(r.data) for r in s.scalars(select(MatchingMetricRow).order_by(MatchingMetricRow.id))]
             state = {r.key: r.value for r in s.scalars(select(AppStateRow))}
         store.settings = {**DEFAULT_SETTINGS, **_dec(state.get("settings", {}))}
         store.settings_log = _dec(state.get("settings_log", {}).get("items", []))
@@ -220,16 +241,20 @@ class DbSync:
     def wipe(self):
         from sqlalchemy import delete
 
-        from ..models.order import AnomalyRow, AppStateRow, AuditRow, OrderRow
+        from ..models.audit import AuditRow
+        from ..models.order import AnomalyRow, AppStateRow, OrderRow
+        from ..models.metrics import MatchingMetricRow
+        from ..models.review import ReviewRow
         from ..models.user import AuthTokenRow, DriverRow, ShipperRow, UserRow
         with SessionLocal() as s:
-            for model in (AuditRow, AnomalyRow, OrderRow, AuthTokenRow, DriverRow, ShipperRow, UserRow, AppStateRow):
+            for model in (AuditRow, ReviewRow, MatchingMetricRow, AnomalyRow, OrderRow, AuthTokenRow, DriverRow, ShipperRow, UserRow,
+                          AppStateRow):
                 s.execute(delete(model))
             s.commit()
         self.hashes.clear()
 
 
-class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin):
+class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, TrackingMixin):
     def __init__(self, persistent: bool = False):
         """persistent=True: PostgreSQL 에 저장 · 복원 (서버용). False: 메모리만 (테스트용)."""
         self.lock = threading.RLock()
@@ -251,11 +276,26 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin):
         self.reset()
 
     def _after_load(self):
-        """DB 에서 불러온 뒤, 저장하지 않는 실행 상태(시뮬레이션 시계 · 배경 차량)를 다시 만든다."""
+        """DB 에서 불러온 뒤, 저장하지 않는 실행 상태(시뮬레이션 시계 · 배경 차량)를 다시 만든다.
+        예전 버전 데이터면 새 필드(번호판 용도 · 톤수 · 사업자 확인 · 해시 체인)를 채운다."""
+        from ..engines import compliance_engine as comp
+        from ..engines.fsm.order_fsm import rebuild_chain
         now = datetime.now()
         self.started_at = self.last_tick = now
         self.rng = random.Random(7)
         self.bg_fleet = self._make_background_fleet()
+        self.reviews = getattr(self, "reviews", None) or {}
+        self.metrics_log = getattr(self, "metrics_log", None) or []
+        self._metric_seq = max((int(e["id"].split("-")[1]) for e in self.metrics_log), default=0)
+        self.tracking = {}
+        for d in self.drivers.values():
+            d.setdefault("plate_type", comp.classify_plate(d["plate"])["plate_type"])
+            d.setdefault("tonnage", comp.tonnage(d["truck_type"]))
+        for s in self.shippers.values():
+            s.setdefault("biz_check", comp.mock_business_status(s.get("biz_no")))
+        if any(not e.get("current_hash") for e in self.audit):
+            rebuild_chain(self.audit)  # 해시 체인 도입 전 감사 로그 → 한 번 다시 엮는다
+        self._audit_seq = max((int(e["id"].split("-")[1]) for e in self.audit), default=0)
 
     def persist(self, throttle: float = 0.0):
         """바뀐 데이터를 DB 에 저장 (DB 를 안 쓰면 아무것도 안 함)."""
@@ -281,12 +321,18 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin):
         self.rng = random.Random(7)
         self.users: dict[str, dict] = {}
         self.tokens: dict[str, str] = {}
-        self.shippers = {s["id"]: dict(s) for s in seed.SHIPPERS}
-        self.drivers = {d["id"]: dict(d) for d in seed.DRIVERS}
+        from ..engines import compliance_engine as comp
+        self.shippers = {s["id"]: {**s, "biz_check": comp.mock_business_status(s["biz_no"])} for s in seed.SHIPPERS}
+        self.drivers = {d["id"]: {**d, "plate_type": comp.classify_plate(d["plate"])["plate_type"],
+                                  "tonnage": comp.tonnage(d["truck_type"])} for d in seed.DRIVERS}
         self.orders: dict[str, dict] = {}
         self.anomalies: dict[str, dict] = {}
-        self.audit: list[dict] = []   # FSM 상태 전이 · 재무 변경 감사 로그
+        self.audit: list[dict] = []   # FSM 상태 전이 · 재무 변경 감사 로그 (SHA-256 해시 체인)
         self._audit_seq = 0
+        self.reviews: dict[str, dict] = {}   # 화주-기사 상호 리뷰
+        self.tracking: dict[str, dict] = {}  # 운행별 GPS 판정 상태 (이탈 연속 횟수 · 계획 ETA)
+        self.metrics_log: list[dict] = []    # 매칭 라운드 성능 로그 (matching_metrics_logs)
+        self._metric_seq = 0
         self._seq: dict[str, int] = {}
         self.settings = dict(DEFAULT_SETTINGS)
         self.settings_log: list[dict] = []
@@ -298,6 +344,11 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin):
         self._seed_packing()
         self._seed_match_history()
         self._seed_audit()
+        reviews = []
+        for r in seed.reviews():
+            idx = r.pop("order_index", None)
+            reviews.append({**r, "order_id": order_ids[idx] if idx is not None else r["order_id"]})
+        self._seed_reviews(reviews, now)
         for i, a in enumerate(seed.anomalies(now), start=1):
             idx = a.pop("order_index")
             order = self.orders[order_ids[idx]] if idx is not None else None

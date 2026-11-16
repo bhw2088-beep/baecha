@@ -67,16 +67,18 @@ services:
         condition: service_healthy
 
   simulator:
-    # 가상 기사 GPS 시뮬레이터 (모의 데이터) → Redis Streams "gps:stream" → 백엔드 GPS 워커
+    # 가상 기사 GPS 시뮬레이터 (모의 데이터 · 가우스 지터 · 고의 이탈 시나리오)
+    #   → POST /tracking/ping/batch → 백엔드가 배정 기사 대조 → Redis Streams "gps:stream" → GPS 워커 판정
     # 가상 화주 주문: docker compose run --rm simulator python -m simulator.virtual_shipper --count 5
     build: .
     command: python -m simulator.virtual_driver
     environment:
       TZ: Asia/Seoul
       API_BASE: http://backend:8000/api/v1
-      REDIS_URL: redis://redis:6379/0
       SIM_API_KEY: ${SIM_API_KEY}
       TIME_SCALE: ${TIME_SCALE:-20}
+      SIM_DEVIATION_EVERY: ${SIM_DEVIATION_EVERY:-240}
+      SIM_REOUTSOURCE_EVERY: ${SIM_REOUTSOURCE_EVERY:-0}
     depends_on:
       - backend
       - redis

@@ -17,22 +17,24 @@ Store 에 섞어 쓰는 Mixin 이다 (데이터는 core/database.py 의 Store �
 
 from __future__ import annotations
 
-import re
+import time
 from datetime import datetime, timedelta
 from statistics import mean
 
-from ..config import DEFAULT_SETTINGS, ML_WEIGHT, SETTING_LABEL
+from ..config import DEFAULT_SETTINGS, ML_THRESHOLD, ML_WEIGHT, SETTING_LABEL
 from ..core.errors import ApiError
 from ..core.redis_client import lock as redis_lock
+from ..engines import compliance_engine as comp
+from ..engines import pricing_engine
 from ..engines.matcher import hungarian, ml_ranker
+from ..engines.matcher.cf_score import cf_score
 from ..engines.matcher import spatial as geo
 from ..models.order import MATCH_BY_LABEL, MATCH_EVENT_LABEL, _iso
 from . import billing_service as pricing
 
 
 def _tons(truck_type: str) -> float:
-    m = re.match(r"(\d+)", truck_type)
-    return float(m.group(1)) if m else 0.0
+    return comp.tonnage(truck_type)  # '2.5톤 카고' → 2.5
 
 
 def is_compatible(driver_truck: str, cargo_truck: str, cold_chain: bool) -> bool:
@@ -58,10 +60,11 @@ class MatchingMixin:
         s = self.settings
         return {**s, "w_util": round(1 - s["w_dist"], 2), "defaults": DEFAULT_SETTINGS,
                 "formula": f"거리 {s['w_dist'] * 100:.0f}% + 적재율 {(1 - s['w_dist']) * 100:.0f}%",
-                "ml_weight": ML_WEIGHT,
-                "pipeline": (f"① PostGIS 반경 {s['radius_km']}km 필터 → ② 규칙 점수(거리 {s['w_dist'] * 100:.0f}% + "
-                             f"적재율 {(1 - s['w_dist']) * 100:.0f}%) {100 - ML_WEIGHT * 100:.0f}% + "
-                             f"AI 수락 예측 {ML_WEIGHT * 100:.0f}% → ③ 헝가리안 최적 배정"),
+                "ml_weight": ML_WEIGHT, "ml_threshold": ML_THRESHOLD,
+                "pipeline": (f"① PostGIS 반경 {s['radius_km']}km · 승인 · 노란 번호판 · 톤수 · 블랙리스트 필터 → "
+                             f"② 규칙 점수(거리 {s['w_dist'] * 100:.0f}% + 적재율 {(1 - s['w_dist']) * 100:.0f}%) "
+                             f"{100 - ML_WEIGHT * 100:.0f}% + AI 수락 예측 {ML_WEIGHT * 100:.0f}% "
+                             f"(lgb_score ≥ {ML_THRESHOLD:.2f}) → ③ 헝가리안 최적 배정"),
                 "log": self.settings_log[-8:][::-1]}
 
     def update_settings(self, new: dict, by: str) -> dict:
@@ -119,6 +122,23 @@ class MatchingMixin:
         return {"fits": fits, "volume_util": m["volume_util"], "weight_util": m["weight_util"],
                 "util": max(m["volume_util"], m["weight_util"]), "fit_note": note}
 
+    @staticmethod
+    def _required_tonnage(o: dict) -> float:
+        """화물 필수 최소 톤수: 적재 계획이 있으면 안전율 적용 총중량 · 총부피로 산출, 없으면 요청 차종 톤수."""
+        if o.get("required_tonnage") is None:
+            from ..config import settings
+            from ..engines.packer.trucks import TRUCKS
+            from ..engines.validation_engine import required_tonnage
+            pk = o["packing"]
+            if pk:
+                m = pk["metrics"]
+                need = required_tonnage(m["loaded_weight"], m["loaded_volume_m3"] * 1e9, list(TRUCKS.values()),
+                                        settings.safety_margin, o["cold_chain"])
+            else:
+                need = _tons(o["truck_type"])
+            o["required_tonnage"] = need or _tons(o["truck_type"])
+        return o["required_tonnage"]
+
     # ---- 2단계 점수: 규칙 점수(거리 · 적재율) + LightGBM 수락 예측
     def _accept_rates(self) -> dict[str, float]:
         """기사별 과거 제안 수락률 (ML 피처). 매칭 라운드 동안은 한 번 계산한 값을 쓴다."""
@@ -131,10 +151,30 @@ class MatchingMixin:
             rates[d["id"]] = r / 100 if r is not None else 0.7
         return rates
 
+    def _region_history(self, driver_id: str) -> tuple[list[str], list[str]]:
+        """기사가 수락 · 거절한 화물의 상차 권역 목록 (cf_score 입력)."""
+        acc, dec = [], []
+        for o in self.orders.values():
+            for e in o["match_log"]:
+                if e["driver_id"] != driver_id:
+                    continue
+                if e["event"] in ("accepted", "picked", "assigned"):
+                    acc.append(pricing_engine.region_of(o["origin"]))
+                elif e["event"] in ("declined", "expired"):
+                    dec.append(pricing_engine.region_of(o["origin"]))
+        return acc, dec
+
+    def _cf(self, o: dict, driver_id: str) -> float:
+        d = self.drivers[driver_id]
+        acc, dec = self._region_history(driver_id)
+        return cf_score(d["location"], o["origin"], o["destination"], acc, dec)
+
     def _ml_features(self, o: dict, driver_id: str, km: float, util: float, rates: dict) -> dict:
         return {"pickup_km": km, "util": util, "fare_gap": self._fare_est(o)["gap_ratio"],
                 "trip_km": o["distance_km"], "cold": float(o["cold_chain"]), "urgent": float(o["urgent"]),
-                "accept_rate": rates.get(driver_id, 0.7)}
+                "accept_rate": rates.get(driver_id, 0.7), "cf_score": self._cf(o, driver_id),
+                "rating": self.driver_rating(driver_id)["avg"] or 4.5,
+                "rush_hour": float(pricing_engine.is_rush_hour())}
 
     def _combine(self, rule: float, ml: float) -> float:
         return round((1 - ML_WEIGHT) * rule + ML_WEIGHT * ml, 4)
@@ -142,8 +182,10 @@ class MatchingMixin:
     def _pair_score(self, o: dict, driver_id: str, km: float, util: float) -> dict:
         """화물 × 기사 한 쌍의 점수 (추천 리스트 · 배차 확정 기록용)."""
         rule = self._score(km, util)
-        ml = ml_ranker.predict([self._ml_features(o, driver_id, km, util, self._accept_rates())])[0]
-        return {"rule_score": rule, "ml_prob": ml, "score": self._combine(rule, ml)}
+        feats = self._ml_features(o, driver_id, km, util, self._accept_rates())
+        ml = ml_ranker.predict([feats])[0]
+        return {"rule_score": rule, "ml_prob": ml, "score": self._combine(rule, ml), "cf_score": feats["cf_score"],
+                "lgb_pass": ml >= ML_THRESHOLD}
 
     def _evaluate(self, o: dict) -> list[dict]:
         """등록된 모든 기사를 이 화물 기준으로 평가.
@@ -154,9 +196,12 @@ class MatchingMixin:
         rates = self._accept_rates()
         fit_cache: dict[str, dict] = {}
         rows = []
+        need = self._required_tonnage(o)
         for d in self.drivers.values():
-            if not d.get("approved", True):
-                continue  # 관제 가입 승인 전인 기사는 매칭 후보에서 제외
+            if not self.driver_dispatchable(d):
+                continue  # 하드 필터: 관제 승인 · 사업용 노란 번호판 · 블랙리스트 아님
+            if d.get("tonnage", _tons(d["truck_type"])) < need:
+                continue  # 하드 필터: 기사 톤수 ≥ 화물 필수 최소 톤수 (적재 검증 산출)
             t = d["truck_type"]
             if t not in fit_cache:
                 fit_cache[t] = self._fit(o, t)
@@ -168,17 +213,21 @@ class MatchingMixin:
                 "busy": self._driver_busy(d["id"], except_order=o["id"]),
                 "declined": d["id"] in o["declined"], "in_radius": spatial_ok and km <= radius,
                 "rule_score": self._score(km, f["util"]) if f["fits"] else None, "ml_prob": None, "score": None,
+                "cf_score": None, "lgb_pass": None,
             })
         fit_rows = [r for r in rows if r["fits"]]
-        probs = ml_ranker.predict([self._ml_features(o, r["id"], r["pickup_km"], r["util"], rates)
-                                   for r in fit_rows])
-        for r, p in zip(fit_rows, probs):
+        feats = [self._ml_features(o, r["id"], r["pickup_km"], r["util"], rates) for r in fit_rows]
+        probs = ml_ranker.predict(feats)
+        for r, p, f in zip(fit_rows, probs, feats):
             r["ml_prob"], r["score"] = p, self._combine(r["rule_score"], p)
+            r["cf_score"], r["lgb_pass"] = f["cf_score"], p >= ML_THRESHOLD  # 보수적 임계값 (행동적 오탐 차단)
         return rows
 
     @staticmethod
     def _ranking(rows: list[dict]) -> list[dict]:
-        ok = [r for r in rows if r["fits"] and not r["busy"] and not r["declined"] and r["in_radius"]]
+        """자동 제안 후보: 전량 적재 · 비어 있음 · 거절 안 함 · 반경 안 · lgb_score ≥ 임계값."""
+        ok = [r for r in rows if r["fits"] and not r["busy"] and not r["declined"] and r["in_radius"]
+              and r["lgb_pass"]]
         return sorted(ok, key=lambda r: (-r["score"], r["pickup_km"]))
 
     def _fail_reasons(self, o: dict, rows: list[dict]) -> list[str]:
@@ -194,6 +243,12 @@ class MatchingMixin:
                 nearest = min(r["pickup_km"] for r in free)
                 reasons.append(f"반경 {self.settings['radius_km']}km 내 적재 가능한 공차 없음 "
                                f"(가장 가까운 공차 {nearest:.0f}km)")
+            else:
+                low = [r for r in free if r["in_radius"] and not r["lgb_pass"]]
+                if low:
+                    best = max(r["ml_prob"] for r in low)
+                    reasons.append(f"반경 안 공차 {len(low)}대 모두 AI 수락 예측이 임계값 {ML_THRESHOLD:.2f} 미만 "
+                                   f"(최고 {best:.2f}) → 보수적 차단")
         if o["declined"]:
             reasons.append(f"기사 {len(o['declined'])}명 거절 · 응답 없음")
         if o["match_note"]:
@@ -216,6 +271,7 @@ class MatchingMixin:
                              key=lambda o: o["posted_at"])
             if not pending:
                 return
+            t0 = time.perf_counter()
             self._rates_cache = self._accept_rates()
             try:
                 evals = {o["id"]: self._evaluate(o) for o in pending}
@@ -226,11 +282,13 @@ class MatchingMixin:
             order_ids = [o["id"] for o in pending]
             driver_ids = sorted({d for _, d in score})
             pairs = hungarian.assign(order_ids, driver_ids, score)
+            latency_ms = (time.perf_counter() - t0) * 1000
             greedy = hungarian.greedy(order_ids, driver_ids, score)
             if score:
                 self.last_round = {"at": _iso(now), "orders": len(pending), "drivers": len(driver_ids),
                                    "assigned": len(pairs), "total": round(sum(s for *_, s in pairs), 3),
                                    "greedy_assigned": len(greedy), "greedy_total": round(sum(s for *_, s in greedy), 3)}
+            self._log_round(now, pending, evals, rankings, pairs, greedy, latency_ms)
             assigned = {oid: (did, s) for oid, did, s in pairs}
             for o in pending:
                 ranking = rankings[o["id"]]
@@ -259,6 +317,50 @@ class MatchingMixin:
                     # 후보는 있지만, 전체 최적 배정에서 그 기사들이 다른 화물에 배정됨 → 다음 라운드 대기
                     o["match_fail"], o["match_fail_at"] = None, None
                     o["match_wait"] = f"후보 {len(ranking)}대가 모두 다른 화물에 최적 배정됨 → 다음 배정 대기"
+
+    # ---- 매칭 성능 로그 (matching_metrics_logs)
+    def _log_round(self, now, pending, evals, rankings, pairs, greedy, latency_ms: float):
+        """배정 라운드 기록. 제안을 보낸 라운드는 항상, 아무 변화 없는 라운드는 30초에 한 번만 남긴다."""
+        logs = self.metrics_log
+        if not pairs and logs and (now - logs[-1]["at"]).total_seconds() < 30:
+            return
+        km = {(oid, r["id"]): r["pickup_km"] for oid, ranking in rankings.items() for r in ranking}
+        hk = [km[(o, d)] for o, d, _ in pairs]
+        gk = [km[(o, d)] for o, d, _ in greedy]
+        h_avg, g_avg = (mean(hk) if hk else None), (mean(gk) if gk else None)
+        reduction = round((g_avg - h_avg) / g_avg * 100, 1) if h_avg is not None and g_avg else None
+        filtered = sum(1 for rows in evals.values() for r in rows
+                       if r["fits"] and not r["busy"] and r["in_radius"] and r["lgb_pass"] is False)
+        self._metric_seq = getattr(self, "_metric_seq", len(logs)) + 1
+        logs.append({"id": f"MR-{self._metric_seq:06d}", "at": now, "orders": len(pending),
+                     "drivers": len({d for r in rankings.values() for d in (x["id"] for x in r)}),
+                     "assigned": len(pairs), "greedy_assigned": len(greedy), "latency_ms": round(latency_ms, 2),
+                     "hungarian_avg_km": round(h_avg, 2) if h_avg is not None else None,
+                     "greedy_avg_km": round(g_avg, 2) if g_avg is not None else None,
+                     "deadhead_reduction_pct": reduction, "threshold_filtered": filtered,
+                     "failed": sum(1 for o in pending if not rankings[o["id"]])})
+        del logs[:-500]  # 최근 500 라운드만 유지
+
+    def matching_metrics(self) -> dict:
+        """실시간 매칭 메트릭스: 배차 지연 p95 · 공차 거리 단축률 · 거절률 · 임계값 차단."""
+        logs = self.metrics_log
+        lat = sorted(e["latency_ms"] for e in logs)
+        p95 = lat[min(len(lat) - 1, int(round(0.95 * (len(lat) - 1))))] if lat else None
+        red = [e["deadhead_reduction_pct"] for e in logs if e["deadhead_reduction_pct"] is not None and e["assigned"]]
+        events = [e for o in self.orders.values() for e in o["match_log"]]
+        answered = [e for e in events if e["event"] in ("accepted", "declined", "expired")]
+        rejected = [e for e in answered if e["event"] != "accepted"]
+        return {
+            "rounds": len(logs),
+            "dispatch_latency_p95_sec": round(p95 / 1000, 4) if p95 is not None else None,
+            "dispatch_latency_p95_ms": p95,
+            "target_p95_sec": 3.0,
+            "empty_deadhead_km_reduction_pct": round(mean(red), 1) if red else None,
+            "rejection_rate_pct": round(100 * len(rejected) / len(answered), 1) if answered else None,
+            "threshold_filtered": sum(e["threshold_filtered"] for e in logs),
+            "ml_threshold": ML_THRESHOLD,
+            "recent": [{**e, "at": _iso(e["at"])} for e in logs[-15:][::-1]],
+        }
 
     def _matching_tick(self):
         """제안 시간 초과 처리 → 제안이 없는 매칭 대기 화물(실패 포함) 전체를 헝가리안으로 다시 배정."""
@@ -360,8 +462,8 @@ class MatchingMixin:
         """AI 추천 리스트: 내 차량에 전량 실리는 매칭 대기 화물을 매칭 점수(거리 + 적재율, 관제 설정 가중치) 순으로.
         반경 밖 화물도 포함(점수 낮게), 나에게 온 제안은 위 카드에 따로 보여 주므로 제외."""
         d = self.drivers[driver_id]
-        if not d.get("approved", True):
-            return []  # 가입 승인 전
+        if not self.driver_dispatchable(d):
+            return []  # 가입 승인 전 · 자가용 번호판 · 블랙리스트
         here = self._driver_coord(d)
         rows = []
         for o in self.orders.values():
@@ -394,8 +496,8 @@ class MatchingMixin:
         o = self._get_order(order_id)
         if o["status"] != "MATCHING":
             raise ApiError(409, "이미 배차된 화물입니다.")
-        if not self.drivers[driver_id].get("approved", True):
-            raise ApiError(403, "관제의 가입 승인 후 배차를 받을 수 있습니다.")
+        if not self.driver_dispatchable(self.drivers[driver_id]):
+            raise ApiError(403, "배차를 받을 수 없는 상태입니다 (가입 승인 전 · 사업용 번호판 아님 · 이용 제한).")
         if self._active_run_of(driver_id):
             raise ApiError(409, "진행 중인 운행을 먼저 완료해 주세요.")
         off = o["offer"]
@@ -503,8 +605,10 @@ class MatchingMixin:
             mine = [o for o in matched if o["match"]["driver_id"] == d["id"]]
             st = self._driver_offer_stats(d["id"])
             run = self._active_run_of(d["id"])
+            rt = self.driver_rating(d["id"])
             drivers.append({
                 "name": d["name"], "plate": d["plate"], "truck_type": d["truck_type"], "matched": len(mine),
+                "rating": rt["avg"], "reviews": rt["count"], "blacklisted": bool(d.get("blacklisted")),
                 "avg_pickup_km": round(mean(o["match"]["pickup_km"] for o in mine), 1) if mine else None,
                 "offers": st["offers"], "accept_rate": st["accept_rate"],
                 "state": "운행중" if run else ("제안 대기" if self._pending_offer_of(d["id"]) else "공차"),
@@ -521,10 +625,11 @@ class MatchingMixin:
                 if answered else None,
             },
             "settings": self.settings_view(),
+            "metrics": self.matching_metrics(),
             "engine": {  # 3단계 매칭 엔진 상태 (관제 '매칭 분석' 화면)
                 "pipeline": self.settings_view()["pipeline"],
                 "spatial": "PostGIS ST_DWithin" if getattr(self, "db", None) else "직선거리 (DB 미사용)",
-                "ml": ml_ranker.info(), "ml_weight": ML_WEIGHT,
+                "ml": ml_ranker.info(), "ml_weight": ML_WEIGHT, "ml_threshold": ML_THRESHOLD,
                 "last_round": getattr(self, "last_round", None),  # 최근 헝가리안 배정 vs 탐욕 방식 비교
             },
             "pickup_dist": dist,

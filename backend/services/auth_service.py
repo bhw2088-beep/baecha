@@ -9,9 +9,10 @@ from __future__ import annotations
 import secrets
 from datetime import datetime
 
-from ..config import ADMIN_APPROVAL_CODE
+from ..config import ADMIN_APPROVAL_CODE, settings
 from ..core.errors import ApiError
 from ..core.security import _hash_pw
+from ..engines import compliance_engine as comp
 from ..engines.matcher import spatial as geo
 from ..models.order import _iso
 from . import billing_service as pricing
@@ -46,8 +47,19 @@ class AuthMixin:
         email = self.tokens.get(token)
         return self.users.get(email) if email else None
 
+    def _check_business(self, biz_no: str | None, owner: str | None, start_date: str | None) -> dict:
+        """사업자 확인 (Phase 0): Mod-10 → 국세청 API(키 있을 때) 또는 모의 상태. 계속사업자가 아니면 가입 거절."""
+        if not biz_no:
+            raise ApiError(400, "사업자등록번호를 입력해 주세요.")
+        res = comp.verify_business(biz_no, api_key=settings.nts_api_key, owner=owner, start_date=start_date)
+        if not res["ok"]:
+            raise ApiError(400, f"사업자등록번호 확인 실패: {res['label']}"
+                                + (f" ({res['note']})" if res.get("note") else "") + f" · {res['source_label']}")
+        return res
+
     def register(self, *, role, email, password, name, phone, company=None, biz_no=None,
-                 plate=None, truck_type=None, base_location=None, approval_code=None, documents=None) -> dict:
+                 plate=None, truck_type=None, base_location=None, approval_code=None, documents=None,
+                 owner_name=None, open_date=None) -> dict:
         email = email.lower().strip()
         if email in self.users:
             raise ApiError(409, "이미 가입된 이메일입니다.")
@@ -56,8 +68,10 @@ class AuthMixin:
         if role == "shipper":
             if not company or not biz_no:
                 raise ApiError(400, "기업명과 사업자등록번호를 입력해 주세요.")
+            biz = self._check_business(biz_no, owner_name, open_date)
             org_id = f"S-{len(self.shippers) + 1:03d}"
-            self.shippers[org_id] = {"id": org_id, "name": company, "biz_no": biz_no}
+            self.shippers[org_id] = {"id": org_id, "name": company, "biz_no": biz["biz_no"], "biz_check": biz,
+                                     "owner_name": owner_name or None}
             sub = company
         elif role == "driver":
             if not plate or not truck_type or not biz_no:
@@ -66,15 +80,27 @@ class AuthMixin:
                 raise ApiError(400, "지원하지 않는 차종입니다.")
             if base_location and not geo.is_known(base_location):
                 raise ApiError(400, "주 대기 지역을 지역 목록에서 선택해 주세요.")
+            p = comp.classify_plate(plate)
+            if p["plate_type"] == "INVALID":
+                raise ApiError(400, "차량 번호 형식이 올바르지 않습니다. 예: 경기 88바 7712")
+            if not p["dispatchable"]:
+                raise ApiError(400, f"{p['label']} 차량은 등록할 수 없습니다. "
+                                    "화물 운송은 사업용 노란색 번호판(바 · 사 · 아 · 자)만 가능합니다.")
+            missing = comp.missing_driver_docs(documents or [])
+            if missing:
+                raise ApiError(400, "필수 서류를 첨부해 주세요: " + ", ".join(missing))
+            biz = self._check_business(biz_no, owner_name or name, open_date)
             org_id = f"D-{len(self.drivers) + 1:03d}"
-            self.drivers[org_id] = {"id": org_id, "name": name, "phone": phone, "plate": plate,
+            self.drivers[org_id] = {"id": org_id, "name": name, "phone": phone, "plate": plate.strip(),
+                                    "plate_type": p["plate_type"], "tonnage": comp.tonnage(truck_type),
                                     "truck_type": truck_type, "location": base_location or "대전 중구", "month_runs": 0,
                                     # 관제 '컴플라이언스'에서 서류 확인 후 승인해야 배차를 받을 수 있다
                                     "approved": False,
                                     "approval": {"status": "PENDING", "requested_at": _iso(datetime.now()),
-                                                 "biz_no": biz_no, "documents": documents or [],
+                                                 "biz_no": biz["biz_no"], "biz_check": biz,
+                                                 "documents": documents or [],
                                                  "decided_at": None, "decided_by": None, "reason": None}}
-            sub = f"{truck_type} · {plate}"
+            sub = f"{truck_type} · {plate.strip()}"
         elif role == "admin":
             if approval_code != ADMIN_APPROVAL_CODE:
                 raise ApiError(403, "관제센터 승인 코드가 올바르지 않습니다.")
@@ -85,18 +111,33 @@ class AuthMixin:
                           org_id=org_id, sub=sub, documents=documents or [])
         return self.login(email, password)
 
+    @staticmethod
+    def driver_dispatchable(d: dict) -> bool:
+        """매칭 후보 자격: 관제 승인 + 사업용 노란색 번호판 + 블랙리스트 아님."""
+        return (d.get("approved", True) and d.get("plate_type", "COMMERCIAL_YELLOW") == "COMMERCIAL_YELLOW"
+                and not d.get("blacklisted"))
+
     # ------------------------------------------------------------------ 관제 컴플라이언스: 차주 가입 승인
     def compliance_drivers(self) -> list[dict]:
-        """가입 심사 목록 (승인 대기 먼저). 시드 기사는 승인 완료 상태."""
+        """가입 심사 목록 (승인 대기 먼저). 시드 기사는 승인 완료 상태. 번호판 · 사업자 · 서류 · 평점 함께."""
         users = {u["org_id"]: u for u in self.users.values() if u["role"] == "driver"}
         rows = []
         for d in self.drivers.values():
             a = d.get("approval") or {"status": "APPROVED", "requested_at": None, "documents": [], "reason": None,
-                                      "decided_at": None, "decided_by": "시드 데이터", "biz_no": None}
+                                      "decided_at": None, "decided_by": "시드 데이터", "biz_no": d.get("biz_no"),
+                                      "biz_check": d.get("biz_check")}
             u = users.get(d["id"], {})
+            cp = comp.driver_compliance(d["plate"], d["truck_type"], a.get("documents") or [], a.get("biz_check"))
+            if d.get("approval") is None:  # 시드 기사는 서류 심사를 마친 것으로 본다
+                cp["missing_docs"] = []
+                cp["issues"] = [i for i in cp["issues"] if not i.startswith("서류")]
+                cp["ok"] = not cp["issues"]
             rows.append({"id": d["id"], "name": d["name"], "phone": d["phone"], "plate": d["plate"],
                          "truck_type": d["truck_type"], "location": d["location"], "email": u.get("email"),
-                         **a, "approved": d.get("approved", True)})
+                         **a, "approved": d.get("approved", True), "compliance": cp,
+                         "dispatchable": self.driver_dispatchable(d),
+                         "rating": self.driver_rating(d["id"]) if hasattr(self, "driver_rating") else None,
+                         "blacklisted": bool(d.get("blacklisted")), "blacklist": d.get("blacklist")})
         order = {"PENDING": 0, "REJECTED": 1, "APPROVED": 2}
         return sorted(rows, key=lambda r: (order.get(r["status"], 3), r["requested_at"] or ""), reverse=False)
 
@@ -112,6 +153,10 @@ class AuthMixin:
         a.update(status="APPROVED" if approve else "REJECTED", decided_at=_iso(datetime.now()), decided_by=by,
                  reason=None if approve else reason.strip())
         d["approved"] = approve
+        from ..engines.fsm.order_fsm import audit_entry
+        audit_entry(self, None, "compliance", "approve" if approve else "reject", "PENDING", a["status"], by,
+                    note=f"{driver_id} {d['name']} · {d['plate']}" + (f" · 사유: {reason.strip()}" if reason else ""),
+                    order_id=driver_id)
         if approve:
             self._matching_tick()  # 승인되면 바로 매칭 후보가 된다
         return next(r for r in self.compliance_drivers() if r["id"] == driver_id)

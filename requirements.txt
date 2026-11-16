@@ -27,3 +27,7 @@ numpy>=2.1
 
 # ---- 비동기 작업 (Phase ⑧) ----
 celery>=5.5               # 3D 빈패킹 워커 (브로커 · 결과: Redis)
+
+# ---- 명세 Phase 0~8 (4차) ----
+shapely>=2.0              # 실시간 경로 이탈 거리 (GPS ↔ 계획 폴리라인) · 없으면 순수 파이썬 계산
+google-genai>=1.0         # Gemini AI 관제 (GEMINI_API_KEY 가 있을 때만 사용 · 없으면 규칙 기반)

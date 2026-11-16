@@ -17,6 +17,7 @@ import streamlit as st
 import api
 import nav
 import packviz
+import reviews_ui
 import ui
 
 
@@ -88,6 +89,8 @@ def dispatch():
         "차주": (f"{o['driver']['name']} · {o['driver']['plate']}" if o["driver"]
                else f"(제안) {o['matching']['driver']['name']}" if o["matching"] and o["matching"]["state"] == "OFFERED"
                else "매칭 대기"),
+        "기사 평점": ui.stars((o["driver"] or (o["matching"] or {}).get("driver") or {}).get("rating"),
+                          (o["driver"] or (o["matching"] or {}).get("driver") or {}).get("reviews"), "-"),
         "운임": o["fare"],
         "상태": _status_text(o),
         "진행률": o["progress"] / 100,
@@ -184,7 +187,8 @@ def render_order_detail(o: dict, show_map: bool = True):
             how = (f'<div class="ct-muted" style="font-size:12px">{by} · 배차 당시 상차지까지 {mt["pickup_km"]:.0f}km'
                    f'{util}{score}{offers}</div>')
         driver = (f'<div class="ct-item" style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">'
-                  f'<div class="ct-row"><div><div class="ct-strong">{d["name"]} 차주</div>'
+                  f'<div class="ct-row"><div><div class="ct-strong">{d["name"]} 차주 '
+                  f'<span style="color:#F79009">{ui.stars(d.get("rating"), d.get("reviews"))}</span></div>'
                   f'<div class="ct-muted">{d["plate"]} · {d["truck_type"]}</div>{how}</div>'
                   f'<div class="ct-strong">{d["phone"]}</div></div></div>')
     ui.html(f'<div class="ct-card">{top}{body}{driver}</div>')
@@ -198,7 +202,8 @@ def matching_block(o: dict) -> str:
     if m["state"] == "OFFERED":
         dv = m["driver"]
         util = f"{m['util'] * 100:.0f}%" if m.get("util") is not None else "-"
-        html = ui.banner(f"자동 매칭 · {dv['name']} 기사 ({dv['plate']} · {dv['truck_type']})에게 배차 제안 중 — "
+        html = ui.banner(f"자동 매칭 · {dv['name']} 기사 ({dv['plate']} · {dv['truck_type']} · "
+                         f"{ui.stars(dv.get('rating'), dv.get('reviews'))})에게 배차 제안 중 — "
                          f"응답 남은 시간 {m['expires_in']}초", "blue")
         html += ui.stats([("상차지까지", f"{m['pickup_km']:.0f}km"), ("기사 차량 적재율", util),
                           ("매칭 점수", f"{m['score'] * 100:.0f}점")])
@@ -236,6 +241,7 @@ def history():
         {"label": "운송 완료", "value": summary["done_count"], "unit": "건", "note": "운송완료 + 정산완료"},
     ])
     invoice_section()
+    reviews_ui.pending_reviews_panel("shipper")
 
     f1, f2, f3, f4 = st.columns([2.2, 1, 1, 1], vertical_alignment="bottom")
     q = f1.text_input("검색", placeholder="화물명, 화물 ID, 차주명", label_visibility="collapsed")
@@ -261,6 +267,7 @@ def history():
         "구간": f"{_short(i['origin'])} → {_short(i['destination'])}",
         "차주": f"{i['driver']['name']} · {i['driver']['plate']}" if i["driver"] else "-",
         "최종 운임": i["total_fee"], "상태": i["status_label"], "청구": i["billing_label"],
+        "내 평가": ui.star_bar((i.get("review") or {}).get("by_shipper")),
         "상차 거리": i["match"]["pickup_km"] if i["match"] else None,
     } for i in items])
     event = st.dataframe(df, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row",
@@ -269,6 +276,7 @@ def history():
         "화물": st.column_config.TextColumn(width=200), "구간": st.column_config.TextColumn(width=190),
         "차주": st.column_config.TextColumn(width=150), "최종 운임": st.column_config.NumberColumn(format="%,d원", width=95),
         "상태": st.column_config.TextColumn(width=70), "청구": st.column_config.TextColumn(width=70),
+        "내 평가": st.column_config.TextColumn(width=85, help="이 운송에 내가 남긴 기사 별점 · 위 '상호 평가'에서 등록"),
         "상차 거리": st.column_config.NumberColumn(format="%.0fkm", width=75,
                                                  help="배차 당시 기사 위치 → 상차지 거리 (자동 매칭 기록)")})
     rows = event.selection.rows
@@ -699,7 +707,18 @@ def _estimate_card(est: dict):
             f'<div class="ct-row" style="margin-bottom:6px"><span class="ct-strong">AI 적정 운임 (자동 산정)</span>'
             f'<span class="ct-big">{ui.won(est["recommended"])}</span></div>{body}'
             f'<div class="ct-muted" style="font-size:12px;margin-top:6px">시세 범위 {est["band"][0]:,} ~ {est["band"][1]:,}원 · '
-            f'기사 배차 제안 카드에도 같은 금액이 표시됩니다.</div></div>')
+            f'기사 배차 제안 카드에도 같은 금액이 표시됩니다.</div>{_market_line(est.get("market"))}</div>')
+
+
+def _market_line(mk: dict | None) -> str:
+    """날씨(모의 확률 분포) · 권역 수급 D/S · 서지 할증 근거 한 줄."""
+    if not mk:
+        return ""
+    surge = f"서지 +{mk['surge']:.0%} 발동" if mk["surge"] else "서지 없음 (D/S ≤ 1.5)"
+    return (f'<div class="ct-muted" style="font-size:12px;margin-top:4px">상차 권역 {mk["region"]} · 날씨 {mk["weather"]}'
+            f'{" (+" + format(mk["weather_multiplier"], ".0%") + ")" if mk["weather_multiplier"] else ""} · '
+            f'수요/공급 {mk["demand"]}/{mk["supply"]} = D/S {mk["ds_ratio"]} → {surge}'
+            f'{" · 러시아워" if mk["rush_hour"] else ""}</div>')
 
 
 def _register_section(plan, stale, title, origin, destination, cold, temp_set, wait, urgent):

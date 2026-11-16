@@ -8,6 +8,7 @@
 입력 rows: Placement.to_dict() 형식 (x,y,z,length,width,height,weight_kg,orig,upright,stackable,max_top_load,drop)
 """
 
+from ..validation_engine import axle_balance, safety_check
 from .trucks import Container
 
 EPS = 1e-6
@@ -18,7 +19,7 @@ def _overlap_1d(a0, a1, b0, b1):
 
 
 def validate(container: Container, rows: list[dict], *, min_support: float, lifo: bool,
-             cold_chain: bool = False) -> list[dict]:
+             cold_chain: bool = False, safety_margin: float = 0.10) -> list[dict]:
     c = container
     n = len(rows)
     box = [(r["x"], r["x"] + r["length"], r["y"], r["y"] + r["width"], r["z"], r["z"] + r["height"]) for r in rows]
@@ -117,14 +118,19 @@ def validate(container: Container, rows: list[dict], *, min_support: float, lifo
     add("lifo", "하차 순서 (LIFO)", access, bad,
         f"하차지 {len(drops)}곳 · 막힘 없음" if lifo else "검사 꺼짐", f"{len(set(bad))}개 상자가 하차 순서상 가로막힘")
 
-    # S1 무게중심 (권고)
-    if total > 0:
-        cx = sum((r["x"] + r["length"] / 2) * r["weight_kg"] for r in rows) / total
-        cy = sum((r["y"] + r["width"] / 2) * r["weight_kg"] for r in rows) / total
-        lat = abs(cy - c.width / 2) / c.width
-        lon = cx / c.length
-        warn = lat > 0.10 or not (0.2 <= lon <= 0.65)
-        add("cog", "무게중심 (권고)", "좌우 편차 ≤ 10%, 전후 위치 20~65%", ["-"] if warn else [],
-            f"전후 {lon:.0%} · 좌우 편차 {lat:.1%}",
-            f"전후 {lon:.0%} · 좌우 편차 {lat:.1%} — 무게 배분 조정 권장", warn=True)
+    # C8 보수적 안전율 (engines/validation_engine.py) — 포장 · 측정 오차 감안, 용량의 90% 초과 시 차단
+    vol_util = sum(r["length"] * r["width"] * r["height"] for r in rows) / c.volume if c.volume else 0
+    wt_util = total / c.max_weight if c.max_weight else 0
+    sc = safety_check(vol_util, wt_util, safety_margin)
+    checks.append({"key": "safety", "name": f"보수적 안전율 ({safety_margin:.0%})",
+                   "rule": f"부피 · 중량 사용률 {sc['warn_at']:.0%} 초과 경고 · {sc['limit']:.0%} 초과 차단",
+                   "status": sc["status"], "detail": sc["detail"], "violations": [] if sc["status"] == "pass" else ["-"]})
+
+    # C9 축중량 균형 (산안법 제173조 편하중 방지) — 무게중심 · 앞축/뒤축 하중
+    ab = axle_balance(rows, c.length, c.width, c.max_weight)
+    checks.append({"key": "cog", "name": "축중량 균형 (산안법 제173조)",
+                   "rule": "좌우 편차 ≤ 10%(15% 초과 차단), 전후 무게중심 20~65%(15~75% 밖 차단)",
+                   "status": ab["status"],
+                   "detail": ab["detail"] + (" — 무게 배분 조정 필요" if ab["status"] != "pass" else ""),
+                   "violations": [] if ab["status"] == "pass" else ["-"], "axle": ab})
     return checks

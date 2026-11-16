@@ -16,10 +16,11 @@ from datetime import datetime, timedelta
 
 DEMO_PASSWORD = "baecha1234"
 
+# 사업자번호는 모두 Mod-10 검증을 통과하는 번호 (engines/compliance_engine.py · 시연용 가상 번호)
 SHIPPERS = [
     {"id": "S-001", "name": "삼성물류", "biz_no": "124-81-00998"},
-    {"id": "S-002", "name": "현대글로비스", "biz_no": "211-81-36001"},
-    {"id": "S-003", "name": "LG디스플레이", "biz_no": "107-81-46711"},
+    {"id": "S-002", "name": "현대글로비스", "biz_no": "211-81-36000"},
+    {"id": "S-003", "name": "LG디스플레이", "biz_no": "107-81-46719"},
 ]
 
 # 차주(기사). location = 공차 대기 위치(주소 키워드)
@@ -38,8 +39,11 @@ DRIVERS = [
      "location": "서울 금천구 가산동", "month_runs": 25},
     {"id": "D-007", "name": "최동현", "phone": "010-1234-1234", "plate": "부산 72자 9081", "truck_type": "11톤 냉동탑차",
      "location": "경기 평택항 물류단지", "month_runs": 26},
+    # D-008 은 자가용(흰색) 번호판 '가' → 컴플라이언스 위반 시연용: 승인돼 있어도 매칭 후보에서 제외된다
     {"id": "D-008", "name": "정우진", "phone": "010-1234-1234", "plate": "부산 11가 2233", "truck_type": "1톤 카고",
      "location": "부산항", "month_runs": 22},
+    {"id": "D-017", "name": "오세훈", "phone": "010-1234-1234", "plate": "서울 87아 5521", "truck_type": "2.5톤 카고",
+     "location": "서울 금천구 독산동", "month_runs": 24},
     # ---- 아래는 모두 운행 중인 기사 (화주 '진행 중 화물' · 관제 지도 시연용, 자동 매칭 후보에는 걸리지 않음) ----
     {"id": "D-009", "name": "장민호", "phone": "010-1234-1234", "plate": "경기 85사 2210", "truck_type": "11톤 탑차",
      "location": "경기 평택시 포승읍", "month_runs": 33},
@@ -239,4 +243,37 @@ def anomalies(now: datetime) -> list[dict]:
         dict(order_index=None, driver_id="D-003", type="STAGNATION", severity="LOW", status="RESOLVED",
              at=now - timedelta(hours=1, minutes=43), text="상차지 입고 지연 (20분)", detail="상차 도크 대기",
              location="구미 국가산업단지 3공단"),
+    ]
+
+
+def reviews() -> list[dict]:
+    """시드 리뷰. order_index = 위 orders() 의 인덱스(완료 화물), 없으면 과거 운행 기록(HIST-...).
+    한상우(D-004)는 평점이 낮아 자동 블랙리스트(이용 제한) 시연용, 최동현(D-007)은 '주의' 구간."""
+    S, D = "shipper", "driver"
+    return [
+        dict(order_index=18, from_role=S, from_id="S-001", to_role=D, to_id="D-002", stars=5,
+             tags=["시간 엄수", "친절"], comment="상차 시간 정확했습니다.", days_ago=17),
+        dict(order_index=20, from_role=S, from_id="S-001", to_role=D, to_id="D-004", stars=2,
+             tags=["지연 도착", "연락 두절"], comment="도착 2시간 지연, 연락이 안 됐습니다.", days_ago=21),
+        dict(order_index=23, from_role=S, from_id="S-003", to_role=D, to_id="D-001", stars=5,
+             tags=["안전 운행", "화물 상태 양호"], days_ago=23),
+        dict(order_index=24, from_role=S, from_id="S-001", to_role=D, to_id="D-001", stars=4,
+             tags=["시간 엄수"], days_ago=46),
+        dict(order_index=21, from_role=D, from_id="D-001", to_role=S, to_id="S-001", stars=4,
+             tags=["상하차 신속"], days_ago=16),
+        dict(order_index=22, from_role=D, from_id="D-001", to_role=S, to_id="S-002", stars=3,
+             tags=["상하차 대기 지연"], days_ago=20),
+        # ---- 과거 운행 기록 평가 (시드 화물 밖) ----
+        dict(order_id="HIST-0412", from_role=S, from_id="S-002", to_role=D, to_id="D-004", stars=2,
+             tags=["화물 파손"], comment="모서리 파손 3건", days_ago=34),
+        dict(order_id="HIST-0388", from_role=S, from_id="S-003", to_role=D, to_id="D-004", stars=1,
+             tags=["연락 두절", "불친절"], days_ago=41),
+        dict(order_id="HIST-0371", from_role=S, from_id="S-002", to_role=D, to_id="D-007", stars=3,
+             tags=["지연 도착"], days_ago=29),
+        dict(order_id="HIST-0365", from_role=S, from_id="S-001", to_role=D, to_id="D-007", stars=2,
+             tags=["경로 이탈"], days_ago=33),
+        dict(order_id="HIST-0350", from_role=S, from_id="S-002", to_role=D, to_id="D-003", stars=5,
+             tags=["안전 운행", "소통 원활"], days_ago=27),
+        dict(order_id="HIST-0342", from_role=S, from_id="S-003", to_role=D, to_id="D-006", stars=4,
+             tags=["친절"], days_ago=30),
     ]

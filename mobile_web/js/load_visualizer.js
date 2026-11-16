@@ -109,6 +109,7 @@
       <div><span class="muted small">부피 적재율</span><b>${Math.round((m.volume_util || 0) * 100)}%</b></div>
       <div><span class="muted small">총 중량</span><b>${Math.round(m.loaded_weight || 0).toLocaleString()}kg</b></div>`;
     build(plan.container, items);
+    showChecks(plan);
     $("slider").max = items.length;
     setStep(0);
     $("stageMsg").hidden = true;
@@ -158,6 +159,32 @@
     });
     resize();
     renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+  }
+
+  // 과적 · 편심 경고: 서버 검증 결과(constraints)의 안전율 · 축중량 · 중량 항목을 빨간/주황 오버레이로
+  function showChecks(p) {
+    const keys = ["safety", "cog", "weight", "stacking"];
+    const cs = (p.constraints || []).filter((c) => keys.includes(c.key));
+    const bad = cs.filter((c) => c.status === "fail");
+    const warn = cs.filter((c) => c.status === "warn");
+    const w = $("warn");
+    if (bad.length || warn.length) {
+      const top = bad.length ? bad : warn;
+      w.className = "warn " + (bad.length ? "fail" : "warnonly");
+      w.innerHTML = (bad.length ? "⛔ 적재 금지 — " : "⚠ 주의 — ") + top.map((c) => `${esc(c.name)}: ${esc(c.detail)}`).join("<br>");
+      w.hidden = false;
+    } else { w.hidden = true; }
+    $("checks").innerHTML = cs.map((c) =>
+      `<div class="${c.status === "fail" ? "fail" : c.status === "warn" ? "warn2" : ""}">${c.status === "pass" ? "✓" : c.status === "warn" ? "⚠" : "⛔"} ` +
+      `<b>${esc(c.name)}</b> · ${esc(c.detail)}</div>`).join("");
+    const cog = (p.metrics || {}).cog;
+    if (cog && scene) {  // 무게중심 표시 (편심이면 빨간색)
+      const axle = cs.find((c) => c.key === "cog");
+      const color = axle && axle.status !== "pass" ? 0xD92D20 : 0x12B76A;
+      const s = new THREE.Mesh(new THREE.SphereGeometry(0.12, 20, 16), new THREE.MeshBasicMaterial({ color }));
+      s.position.set(cog.x / 1000, cog.z / 1000, cog.y / 1000);
+      scene.add(s);
+    }
   }
 
   function resize() {

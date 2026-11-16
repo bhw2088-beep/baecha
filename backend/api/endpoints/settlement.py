@@ -26,9 +26,16 @@ async def estimate(body: EstimateIn, _: dict = Depends(current_user)):
     if not (geo.is_known(body.origin) and geo.is_known(body.destination)):
         raise ApiError(400, "상차지 · 하차지를 지역 목록에서 선택해 주세요.")
     cold = body.cold_chain or body.truck_type in pricing.COLD_TYPES
+    from ...engines.pricing_engine import region_of
     return pricing.estimate(body.truck_type, body.origin, body.destination,
                             cold_chain=cold, urgent=body.urgent, wait_minutes=body.wait_minutes,
-                            weight_kg=body.weight_kg)
+                            weight_kg=body.weight_kg, market=store.market_status(region_of(body.origin)))
+
+
+@router.get("/pricing/market")
+async def market_board(_: dict = Depends(current_user)):
+    """권역별 수급 지수(D/S) · 서지 할증 · 모의 날씨."""
+    return store.market_board()
 
 
 # ------------------------------------------------------------------ 화주

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from ...core.database import store
 from ...core.security import require
+from ...schemas.matching_schema import MatchingMetricsOut
 from ...schemas.order_schema import AssignIn, IncentiveIn, MatchSettingsIn
 
 router = APIRouter(tags=["matching"])
@@ -79,6 +80,12 @@ async def assign(order_id: str, body: AssignIn):
 @router.get("/admin/matching", dependencies=[Admin])
 async def matching_stats():
     return store.matching_stats()
+
+
+@router.get("/admin/matching/metrics", dependencies=[Admin], response_model=MatchingMetricsOut)
+async def matching_metrics():
+    """실시간 매칭 메트릭스: 배차 지연 p95(< 3초 목표) · 공차 거리 단축률 · 거절률 · 임계값 차단 수."""
+    return store.matching_metrics()
 
 
 @router.get("/admin/matching/settings", dependencies=[Admin])

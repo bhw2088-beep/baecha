@@ -1,5 +1,6 @@
 """
-pytest 진입점: 점검 스크립트(test_packing · test_matching · test_fsm · smoke_test)를 각각 실행해
+pytest 진입점: 점검 스크립트(test_packing · test_matching · test_fsm · test_compliance · test_pricing ·
+test_tracking · stress_test --quick · smoke_test)를 각각 실행해
 '결과: N개 통과 · 0개 실패'(종료 코드 0)인지 확인한다.
 
 점검 스크립트는 pytest 없이도 단독 실행할 수 있게 만들어져 있어서(python tests/test_fsm.py),
@@ -18,15 +19,17 @@ ROOT = os.path.dirname(HERE)
 
 
 def _run(script: str, *args: str) -> subprocess.CompletedProcess:
-    env = {**os.environ, "BAECHA_DB": "0", "PYTHONIOENCODING": "utf-8"}
+    env = {**os.environ, "BAECHA_DB": "0", "PYTHONIOENCODING": "utf-8", "NTS_API_KEY": "", "GEMINI_API_KEY": ""}
     return subprocess.run([sys.executable, os.path.join(HERE, script), *args], cwd=ROOT, env=env,
                           capture_output=True, text=True, encoding="utf-8", timeout=600)
 
 
-@pytest.mark.parametrize("script", ["test_packing.py", "test_matching.py", "test_fsm.py"])
+@pytest.mark.parametrize("script", ["test_packing.py", "test_matching.py", "test_fsm.py", "test_compliance.py",
+                                    "test_pricing.py", "test_tracking.py", "stress_test.py --quick"])
 def test_offline_suite(script):
-    """서버 없이 도는 점검 (3D 적재 엔진 · 매칭/거리/운임 · FSM/감사 로그/모의 PG)."""
-    r = _run(script)
+    """서버 없이 도는 점검 (3D 적재 · 매칭/거리/운임 · FSM/감사 로그/모의 PG · 컴플라이언스 · 수급/안전율 ·
+    추적/해시 체인/리뷰 · 마이크로 배치 스트레스)."""
+    r = _run(*script.split())
     tail = "\n".join(r.stdout.strip().splitlines()[-15:])
     assert r.returncode == 0, f"{script} 실패\n{tail}\n{r.stderr[-2000:]}"
     assert "0개 실패" in r.stdout

@@ -54,3 +54,15 @@ input[type=range] { width: 100%; margin: 14px 0 4px; accent-color: var(--brand);
 .metrics div { background: var(--paper); border-radius: 10px; padding: 8px; }
 .metrics b { display: block; font-size: 17px; }
 footer { text-align: center; margin-top: 18px; }
+
+/* 과적 · 편심 경고 오버레이 (안전율 · 축중량 검사 결과) */
+.warn { position: absolute; left: 10px; right: 10px; top: 10px; padding: 10px 12px; border-radius: 10px;
+        font-size: 13px; font-weight: 700; line-height: 1.45; z-index: 2; pointer-events: none; }
+.warn.fail { background: rgba(217, 45, 32, .92); color: #fff; box-shadow: 0 0 0 3px rgba(217, 45, 32, .35); }
+.warn.warnonly { background: rgba(247, 144, 9, .92); color: #fff; }
+.checks { display: grid; gap: 6px; margin: 10px 0 4px; }
+.checks div { font-size: 12.5px; padding: 6px 8px; border-radius: 8px; background: #F2F4F7; }
+.checks .fail { background: #FEE4E2; color: #B42318; font-weight: 700; }
+.checks .warn2 { background: #FEF0C7; color: #B54708; }
+/* hidden 속성이 display:grid 에 덮이지 않게 (불러오는 중 문구가 3D 화면 위에 남던 문제) */
+[hidden] { display: none !important; }

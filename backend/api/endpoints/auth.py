@@ -53,22 +53,37 @@ async def register(
     truck_type: str | None = Form(None),
     base_location: str | None = Form(None),
     approval_code: str | None = Form(None),
+    owner_name: str | None = Form(None),      # 대표자명 (국세청 진위확인용 · 선택)
+    open_date: str | None = Form(None),       # 개업일자 YYYYMMDD (국세청 진위확인용 · 선택)
     license_photo: UploadFile | None = File(None),
+    cargo_license_photo: UploadFile | None = File(None),   # 화물운송종사 자격증
     vehicle_photo: UploadFile | None = File(None),
 ):
     documents = []
-    for kind, f in (("license", license_photo), ("vehicle", vehicle_photo)):
+    for kind, f in (("license", license_photo), ("cargo_license", cargo_license_photo), ("vehicle", vehicle_photo)):
         if f is not None and f.filename:
             data = await f.read()
             if len(data) > 5 * 1024 * 1024:
                 raise ApiError(400, "첨부 파일은 5MB 이하만 가능합니다.")
             # TODO: 오브젝트 스토리지(S3 등)에 저장. 지금은 파일명/크기만 기록한다.
             documents.append({"kind": kind, "filename": f.filename, "size": len(data)})
-    if role == "driver" and len(documents) < 2:
-        raise ApiError(400, "운전면허증과 차량 사진을 모두 첨부해 주세요.")
     return store.register(role=role, email=email, password=password, name=name, phone=phone,
                           company=company, biz_no=biz_no, plate=plate, truck_type=truck_type,
-                          base_location=base_location, approval_code=approval_code, documents=documents)
+                          base_location=base_location, approval_code=approval_code, documents=documents,
+                          owner_name=owner_name, open_date=open_date)
+
+
+@router.get("/compliance/check")
+async def compliance_check(biz_no: str = "", plate: str = ""):
+    """가입 전 미리 확인 (로그인 불필요): 사업자번호 Mod-10 · 사업 상태, 번호판 용도."""
+    from ...config import settings
+    from ...engines import compliance_engine as comp
+    out = {}
+    if biz_no:
+        out["business"] = comp.verify_business(biz_no, api_key=settings.nts_api_key)
+    if plate:
+        out["plate"] = comp.classify_plate(plate)
+    return out
 
 
 @router.get("/auth/me")

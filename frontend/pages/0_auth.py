@@ -117,27 +117,37 @@ def _register_form(meta):
         files = {}
         if role == "shipper":
             extra["company"] = c2.text_input("기업 / 화주명")
-            extra["biz_no"] = c1.text_input("사업자등록번호", placeholder="000-00-00000")
+            extra["biz_no"] = c1.text_input("사업자등록번호", placeholder="000-00-00000",
+                                            help="Mod-10 검증 숫자로 확인합니다. 국세청 키가 있으면 계속사업자 여부도 조회")
+            extra["owner_name"] = c2.text_input("대표자명 (선택)", help="국세청 진위확인에 사용")
+            extra["open_date"] = c1.text_input("개업일자 (선택)", placeholder="YYYYMMDD", help="국세청 진위확인에 사용")
         elif role == "driver":
             extra["biz_no"] = c2.text_input("차주 사업자등록번호", placeholder="000-00-00000")
-            extra["plate"] = c1.text_input("차량 번호", placeholder="경기 00바 0000")
+            extra["plate"] = c1.text_input("차량 번호", placeholder="경기 00바 0000",
+                                           help="사업용 노란색 번호판(용도 문자 바 · 사 · 아 · 자)만 등록할 수 있습니다")
             extra["truck_type"] = c2.selectbox("차종 / 톤수", truck_types)
             extra["base_location"] = c1.selectbox("주 대기 지역", (meta or {}).get("regions") or ["대전 중구"],
                                                   index=None, placeholder="지역 선택 · 입력해서 검색",
                                                   help="자동 매칭의 상차지 거리 계산 기준 위치")
-            st.caption("신원 및 차량 증빙 (각 5MB 이하 이미지)")
-            f1, f2 = st.columns(2)
+            extra["open_date"] = c2.text_input("개업일자 (선택)", placeholder="YYYYMMDD", help="국세청 진위확인에 사용")
+            st.caption("신원 · 자격 · 차량 증빙 3종 필수 (각 5MB 이하 이미지) — 관제 심사 후 배차를 받을 수 있습니다")
+            f1, f2, f3 = st.columns(3)
             files["license_photo"] = f1.file_uploader("운전면허증 / 신분증", type=["png", "jpg", "jpeg"])
-            files["vehicle_photo"] = f2.file_uploader("차량 번호판 / 차량 사진", type=["png", "jpg", "jpeg"])
+            files["cargo_license_photo"] = f2.file_uploader("화물운송종사 자격증", type=["png", "jpg", "jpeg"])
+            files["vehicle_photo"] = f3.file_uploader("차량등록증 / 번호판", type=["png", "jpg", "jpeg"])
         else:
             extra["approval_code"] = c2.text_input("관제센터 승인 코드", type="password",
                                                    help="관제센터 관리자에게 발급받은 보안 인증키")
-        agree = st.checkbox("[필수] 이용약관 및 개인정보 처리방침에 동의합니다.")
+        if role in ("shipper", "driver"):
+            st.caption("시연용 사업자번호 — 통과: 124-81-00998 · 211-81-36000 / 실패: 123-45-67890(검증 숫자 오류) · "
+                       "101-81-45901(휴업) · 220-81-62517(폐업)")
+        agree = st.checkbox("[필수] 이용약관 · 개인정보 처리방침에 동의합니다.")
+        gps = st.checkbox("[필수] 위치정보 수집 · 이용에 동의합니다 (운행 중 GPS · 관제 목적)") if role == "driver" else True
         submitted = st.form_submit_button("가입하고 시작하기", type="primary", width="stretch")
 
     if submitted:
-        if not agree:
-            st.warning("약관에 동의해 주세요.")
+        if not agree or not gps:
+            st.warning("필수 약관에 동의해 주세요.")
         elif password != password2:
             st.warning("비밀번호가 일치하지 않습니다.")
         elif not email or not name:

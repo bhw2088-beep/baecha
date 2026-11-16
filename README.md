@@ -5,10 +5,12 @@
 화주 · 차주 · 통합관제 3가지 역할 화면과, 차주용 휴대폰 3D 적재 가이드를 제공합니다.
 
 > **시연용 모의 · 가상 데이터 안내**
-> - **GPS**: 실제 차량 GPS가 아니라 `simulator/virtual_driver.py` 가 도로 경로를 따라 만든 **모의 데이터**입니다.
+> - **GPS**: 실제 차량 GPS가 아니라 `simulator/virtual_driver.py` 가 도로 경로를 따라 만든 **모의 데이터**입니다 (가우스 지터 · 고의 이탈 시나리오 포함).
 > - **LightGBM 수락 예측**: 실운행 기록이 없어 **가상 데이터(기사 수락 행동 시뮬레이션 8,000건)** 로 학습했습니다. 화면에도 표시됩니다.
 > - **결제(PG)**: `MockPG` **모의 결제**입니다. 카드 · 계좌 정보를 받지 않고 실제 출금도 없습니다.
-> - **AI 관제 보조**: 외부 LLM · API 키 없이 동작하는 **규칙 기반** 에이전트입니다.
+> - **사업자 확인**: Mod-10 검증 + 모의 휴업/폐업 목록. `.env` 에 `NTS_API_KEY` 를 넣으면 국세청 API 로 조회합니다.
+> - **날씨 · 수급**: 확률 분포 모의 기상 · 포아송 가상 콜 기반 D/S 지수입니다.
+> - **AI 관제**: `.env` 에 `GEMINI_API_KEY` 가 있으면 Gemini(Function Calling), 없으면 **규칙 기반** 에이전트로 답합니다.
 
 ---
 
@@ -33,9 +35,11 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **실행�
 ## 아키텍처
 
 ```
- [Streamlit 웹]   [모바일 웹 (Three.js)]                [가상 기사 시뮬레이터] ──XADD──▶ Redis Stream gps:stream
-       │                 │                                                                   │
-       └──── REST /api/v1 ────▶  FastAPI (backend) ◀── XREADGROUP (gps_stream_worker) ────────┘
+ [Streamlit 웹]   [모바일 웹 (Three.js)]        [가상 기사 시뮬레이터] ──POST /tracking/ping──┐
+       │                 │                                                                    ▼
+       └──── REST /api/v1 ────▶  FastAPI (배정 기사 대조) ──XADD──▶ Redis Stream gps:stream ──┐
+                                   ▲                                                         │
+                                   └──── XREADGROUP (gps_stream_worker → 이탈 · 지연 판정) ◀─┘
                                    │   │   │
             PostgreSQL + PostGIS ◀─┘   │   └─▶ Redis 분산 락 (매칭 라운드)
            (화물 · 기사 위치 · 감사 로그)   │
@@ -43,18 +47,32 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **실행�
 ```
 
 ### 3단계 하이브리드 매칭
-1. **공간 필터** `engines/matcher/spatial.py` — PostGIS `ST_DWithin` 으로 상차지 반경 안의 기사만
-2. **스코어링** — 기사 차량 기준 3D 적재 시뮬레이션(전량 적재 · 필수 제약) 통과 차량에 대해
+1. **하드 필터** — PostGIS `ST_DWithin` 반경 + 관제 승인 + **사업용 노란 번호판** + **기사 톤수 ≥ 필수 최소 톤수** + 블랙리스트 제외
+2. **스코어링** — 기사 차량 기준 3D 적재 시뮬레이션(전량 적재 · 안전율 · 축중량 등 필수 제약) 통과 차량에 대해
    규칙 점수(거리 60% + 적재율 40%, 관제가 변경 가능) **70%** + `ml_ranker.py` LightGBM 수락 예측 **30%**
+   (피처: 거리 · 적재율 · 운임 · cf_score(권역 선호) · 기사 평점 · 러시아워 등 10개) → **lgb_score ≥ 0.75** 후보만 자동 제안
 3. **최적 배정** `hungarian.py` — 대기 화물 전체 × 빈 기사 전체를 헝가리안 알고리즘으로 1:1 배정
    → 배정된 기사에게 제안, 거절 · 시간 초과면 다시 배정 (Redis 분산 락 안에서 실행)
 
-### 주문 상태 FSM · 감사 로그
-`engines/fsm/order_fsm.py` 의 전이표로만 상태가 바뀝니다. 모든 전이(특히 청구 · 결제 · 취소)는 감사 로그에 남습니다.
+### 주문 상태 FSM · 감사 로그 (SHA-256 해시 체인)
+`engines/fsm/order_fsm.py` 의 전이표로만 상태가 바뀝니다. 모든 전이 · 관제 조치는 감사 로그에 남고,
+각 줄은 직전 줄의 해시를 이어 SHA-256 으로 묶입니다 (`/admin/audit/verify` 위변조 검사).
 ```
 화물  MATCHING → ASSIGNED → IN_TRANSIT → DELIVERED ⇄ SETTLED
 청구  UNBILLED → REQUESTED → PAID → REFUNDED → (재청구) REQUESTED
 ```
+
+### 명세 Phase 0~8 대응 (4차 · 자세한 비교는 상위 폴더 `명세_비교_정리.md`)
+| Phase | 내용 | 주요 파일 |
+|---|---|---|
+| 0 | 사업자 Mod-10 · 국세청 API(선택) · 노란 번호판 · 필수 서류 3종 · prod compose | `engines/compliance_engine.py`, `docker-compose.prod.yml` |
+| 1 | 안전율 85/90% · 축중량(산안법 173조) · 필수 최소 톤수 · 날씨/수급 서지 · 포아송 주문 | `engines/validation_engine.py`, `engines/pricing_engine.py`, `simulator/virtual_shipper.py` |
+| 2 | 하드 필터 · cf_score · LightGBM 10피처 · 0.75 임계값 · 매칭 메트릭스 | `engines/matcher/cf_score.py`, `models/metrics.py` |
+| 3 | GPS 핑 API · 재위탁 방지 · Shapely 이탈 3회 디바운싱 · 지연 감지 · 해시 체인 | `engines/tracking_engine.py`, `services/tracking_service.py`, `models/audit.py` |
+| 4 | 상호 리뷰(별점 · 태그) · 자동/수동 블랙리스트 | `services/review_service.py`, `models/review.py` |
+| 5 | Gemini Function Calling 관제 (키 없으면 규칙) · 인시던트 리포트 · 조절 가이드 | `engines/ai/gemini_agent.py`, `engines/ai/rule_agent.py` |
+| 6 | 마이크로 배치 스트레스 · GPS 오탐 검증 | `tests/stress_test.py` |
+| 8 | 벤치마킹 보고서 · 법적 준비 초안 | `docs/벤치마킹_보고서.md`, `docs/법적_준비_초안.md` |
 
 ---
 
@@ -65,39 +83,44 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **실행�
 ├── .github/workflows/ci.yml   # CI: pyflakes · 점검 스크립트 (3.12/3.14) + docker compose 통합 점검
 ├── .env.example / .env        # 환경변수 템플릿 / 로컬 실제 값 (.env 는 git 제외)
 ├── docker-compose.yml         # db · redis · backend · worker · simulator · frontend
+├── docker-compose.prod.yml    # 운영용 (포트 비공개 · 자동 재시작 · 헬스체크 · 시뮬레이터는 --profile sim)
 ├── Dockerfile                 # 백엔드/워커/화면 공용 이미지 (Python 3.14)
 ├── requirements.txt           # FastAPI · Streamlit · SQLAlchemy · PostGIS · Redis · Celery · LightGBM · py3dbp …
 ├── backend/
 │   ├── main.py                # 앱 진입점 (CORS · 요청 후 DB 저장 · GPS 워커 시작 · /m 모바일 웹)
 │   ├── config.py              # pydantic-settings (.env)
 │   ├── core/                  # database.py(연결 · 저장소 · DB 동기화) · security.py · redis_client.py · seed.py · errors.py
-│   ├── models/                # user.py(users · shippers · drivers · tokens) · order.py(orders · anomalies · audit_logs)
-│   ├── schemas/               # auth_schema · order_schema · settlement_schema
-│   ├── services/              # auth · order · matching · billing(AI 운임 · MockPG · 인보이스)
+│   ├── models/                # user.py · order.py(orders · anomalies) · audit.py(해시 체인) · review.py · metrics.py
+│   ├── schemas/               # auth · order · settlement · matching(핑 · 메트릭스) · review
+│   ├── services/              # auth · order · matching · billing(AI 운임 · 수급 · MockPG) · tracking · review
 │   ├── engines/
 │   │   ├── packer/            # 3D 빈패킹 (EP 휴리스틱 · py3dbp_engine.py · 기하 검증)
-│   │   ├── matcher/           # spatial.py(PostGIS) · ml_ranker.py(LightGBM) · hungarian.py
-│   │   ├── fsm/order_fsm.py   # 상태 전이 · 감사 로그
-│   │   └── ai/rule_agent.py   # 규칙 기반 AI 관제 보조
+│   │   ├── matcher/           # spatial.py(PostGIS) · cf_score.py · ml_ranker.py(LightGBM) · hungarian.py
+│   │   ├── compliance_engine.py · validation_engine.py · pricing_engine.py · tracking_engine.py
+│   │   ├── fsm/order_fsm.py   # 상태 전이 · 감사 로그 해시 체인
+│   │   └── ai/                # rule_agent.py(규칙) · gemini_agent.py(Gemini Function Calling)
 │   ├── workers/               # celery_app.py · packing_tasks.py · gps_stream_worker.py
-│   ├── api/                   # v1.py · endpoints/(auth · orders · matching · tracking · settlement)
+│   ├── api/                   # v1.py · endpoints/(auth · orders · matching · tracking · settlement · reviews)
 │   └── data/                  # route_cache.json(도로 경로 990개) · ml_ranker.txt/.json(학습된 모델)
 ├── frontend/
 │   ├── app.py                 # 로그인 · 역할별 메뉴
 │   ├── pages/                 # 0_auth · 1_shipper_portal · 2_control_tower · 3_admin_compliance · 4_driver_app
+│   ├── reviews_ui.py          # 화주 · 차주 상호 평가 패널
 │   └── static/style.css       # 전역 스타일
 ├── mobile_web/                # index.html · js/load_visualizer.js · css/mobile_style.css (Three.js r147 CDN)
 ├── simulator/                 # virtual_driver.py(GPS) · virtual_shipper.py(가상 주문 · 부하 테스트)
-└── tests/                     # conftest.py · test_suites.py(pytest) · test_packing · test_matching · test_fsm · smoke_test
+├── docs/                      # 벤치마킹_보고서.md · benchmark_metrics.json · 법적_준비_초안.md
+└── tests/                     # test_suites.py(pytest) · test_packing · test_matching · test_fsm · test_compliance ·
+                               # test_pricing · test_tracking · stress_test · smoke_test
 ```
 
 ## 화면
 
 | 역할 | 메뉴 |
 |---|---|
-| 화주 | 배차 · 실시간 관제 / 신규 화물 등록(운송 정보 → 적재 품목 → 3D 시뮬레이션 → AI 운임) / 정산 · 운송 이력(모의 PG 결제 · 월별 인보이스) |
-| 차주 | 배차 제안 · AI 추천 리스트(AI 수락 예측 표시) · 내 운행 / 수익 · 화주 청구 / 휴대폰 3D 적재 가이드 |
-| 관제 | 전국 관제 지도(AI 관제 브리핑 · GPS 수신) / 매칭 분석(3단계 엔진 · 설정) / 이상 감지 / 컴플라이언스(가입 승인 · 감사 로그 · 결제 취소) / 데모 데이터 초기화 |
+| 화주 | 배차 · 실시간 관제 / 신규 화물 등록(운송 정보 → 적재 품목 → 3D 시뮬레이션(안전율 · 축중량) → AI 운임(날씨 · 수급 서지)) / 정산 · 운송 이력(모의 PG 결제 · 월별 인보이스 · 기사 평가) |
+| 차주 | 배차 제안 · AI 추천 리스트 · 내 운행(평점 · 번호판 · 제한 상태) / 수익 · 화주 청구 · 화주 평가 / 휴대폰 3D 적재 가이드(과적 · 편심 경고) |
+| 관제 | 전국 관제 지도(AI 명령창 · 브리핑 · 실시간 추적 · 권역 수급) / 매칭 분석(엔진 · 성능 로그 · 조절 가이드) / 이상 감지(AI 인시던트 리포트) / 컴플라이언스(가입 심사 · 리뷰/블랙리스트 · 해시 체인 감사 로그 · 결제 취소) / 데모 데이터 초기화 |
 
 ## 테스트
 
