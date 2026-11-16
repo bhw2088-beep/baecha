@@ -1,0 +1,4 @@
+# 개발 · 검사용 (서버 실행에는 필요 없음)
+-r requirements.txt
+pytest>=8.3
+pyflakes>=3.2

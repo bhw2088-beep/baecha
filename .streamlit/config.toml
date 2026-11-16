@@ -1,0 +1,33 @@
+[server]
+headless = true            # 첫 실행 시 이메일 묻는 프롬프트 생략
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "light"
+primaryColor = "#4F46E5"
+backgroundColor = "#F7F8FA"
+secondaryBackgroundColor = "#F1F3F6"
+textColor = "#0E1116"
+borderColor = "#E4E7EC"
+linkColor = "#4338CA"
+baseRadius = "10px"
+buttonRadius = "10px"
+showWidgetBorder = true
+font = "Pretendard, 'Malgun Gothic', sans-serif"
+chartCategoricalColors = ["#4F46E5", "#14B8A6", "#F59E0B", "#3B82F6", "#22C55E", "#EC4899"]
+
+[[theme.fontFaces]]
+family = "Pretendard"
+url = "https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/woff2/PretendardVariable.woff2"
+weight = "45 920"
+
+[theme.sidebar]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F7F8FA"
+textColor = "#0E1116"
+borderColor = "#E4E7EC"

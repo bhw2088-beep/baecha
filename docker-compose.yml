@@ -1,0 +1,96 @@
+# 배차의 민족 — 도커 실행 (Phase 0: 컨테이너 오케스트레이션)
+#   실행:  docker compose up --build -d   → 브라우저에서 http://localhost:8501
+#   로그:  docker compose logs -f
+#   끄기:  docker compose down            (DB 데이터는 pgdata 볼륨에 남음)
+#   DB까지 완전히 지우기: docker compose down -v
+# 접속 정보(DB 계정 등)는 .env 에서 읽습니다. 처음이면 .env.example 을 .env 로 복사하세요.
+name: baecha
+
+services:
+  db:
+    image: postgis/postgis:17-3.5          # PostgreSQL 17 + PostGIS 3.5
+    environment:
+      TZ: Asia/Seoul
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"                        # VS Code · DB 도구에서 접속할 때 (localhost:5432)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine                # 분산 락 · GPS 스트림 · Celery 브로커
+    environment:
+      TZ: Asia/Seoul
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: .
+    command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment:
+      TZ: Asia/Seoul            # 컨테이너 기본은 UTC → '오늘' 기준 시각을 한국 시간으로
+      # 컨테이너끼리는 서비스 이름(db, redis)으로 접속 (.env 의 localhost 주소를 덮어씀)
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    # Celery 워커: 3D 빈패킹 등 무거운 계산 (브로커 · 결과 = Redis)
+    build: .
+    command: celery -A backend.workers.celery_app worker -l info --concurrency 2 -n packer@%h
+    env_file: .env
+    environment:
+      TZ: Asia/Seoul
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  simulator:
+    # 가상 기사 GPS 시뮬레이터 (모의 데이터) → Redis Streams "gps:stream" → 백엔드 GPS 워커
+    # 가상 화주 주문: docker compose run --rm simulator python -m simulator.virtual_shipper --count 5
+    build: .
+    command: python -m simulator.virtual_driver
+    environment:
+      TZ: Asia/Seoul
+      API_BASE: http://backend:8000/api/v1
+      REDIS_URL: redis://redis:6379/0
+      SIM_API_KEY: ${SIM_API_KEY}
+      TIME_SCALE: ${TIME_SCALE:-20}
+    depends_on:
+      - backend
+      - redis
+
+  frontend:
+    build: .
+    command: python -m streamlit run frontend/app.py --server.address 0.0.0.0 --server.port 8501
+    environment:
+      TZ: Asia/Seoul
+      BAECHA_API_BASE: http://backend:8000/api/v1
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

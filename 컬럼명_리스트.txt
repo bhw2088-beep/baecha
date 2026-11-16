@@ -1,0 +1,547 @@
+==============================================================================
+ 배차의 민족 — 사용된 컬럼명(필드명) 리스트 (수정본)
+==============================================================================
+
+ [수정본 변경 요약]
+   추가 : orders 자동 매칭 필드(posted_at, offer, declined, match_log, match_fail, match_fail_at, match),
+          화면 응답 matching, 매칭 분석(/admin/matching), 배차 제안(/driver/offer),
+          AI 추천 리스트(/driver/recommendations · rec), 도로 경로(route = 도로 경로 점 목록, fleet.path,
+          route_cache.json)
+   삭제 : 별점·리뷰(rating, rating_tags, review, avg_rating, drivers.rating), SLA 고정값(sla_rate,
+          on_time_rate, SLA_KPI, SLA_TREND), 교통 정보(/admin/traffic), 이상 조치(actions, cooling),
+          오더 보드 전용 값(pickup_km/compatible/match_rate/tags)
+
+
+ ============================================================================
+ [3차 변경 · DB 테이블 · 새 필드]
+ ============================================================================
+ DB 테이블 (PostgreSQL · backend/models/)   ★ 자주 찾는 값은 컬럼, 나머지는 data(JSONB)에 원본 그대로
+   users        email★(PK) · id · role · name · org_id · created_at · data
+   shippers     id★ · name · data
+   drivers      id★ · name · truck_type · location · geom(PostGIS POINT, 대기 위치) · month_runs · data
+   auth_tokens  token★ · email
+   orders       id★ · shipper_id · driver_id · status · title · truck_type · origin · destination ·
+                origin_geom · dest_geom(PostGIS POINT) · price · created_at · data
+   anomalies    id★ · order_id · driver_id · type · status · at · data
+   audit_logs   id★ · at · order_id · event · actor · data      (추가만 · 수정/삭제 없음)
+   app_state    key★ · value   (settings · settings_log · seq)
+
+ orders 새 필드
+   payment / payments   dict / list   모의 PG 결제 (pg · test · tid · approval_no · method · method_label · amount ·
+                                      supply · vat · status[APPROVED/CANCELLED] · approved_at · cancelled_at · cancel_reason)
+   gps · gps_at         dict / datetime  최근 GPS (lat · lon · ts) · 수신 시각
+   match_wait           str           헝가리안 배정에서 밀린 경우 대기 사유
+   offer / match 추가   rule_score · ml_prob(AI 수락 예측) · rank(이 화물 기준 순위) · assign("hungarian")
+   billing 코드값 추가   REFUNDED(결제 취소)
+ drivers 새 필드
+   approved             bool          가입 승인 여부 (시드 기사는 없음 = 승인)
+   approval             dict          status[PENDING/APPROVED/REJECTED] · requested_at · biz_no · documents ·
+                                      decided_at · decided_by · reason
+ 감사 로그 필드 (audit_logs.data)
+   id · at · order_id · kind[order/billing] · event · label · from · to · actor · financial · amount · note
+   event 코드값: create · assign · start · deliver · request · pay · settle · refund · unsettle
+ AI 관제 브리핑 (/admin/agent/briefing)
+   summary · counts{HIGH,MEDIUM,LOW} · categories · insights[severity · category · title · detail ·
+   evidence · action{type,label,endpoint,amount} · message · order_id]
+ 새 화면 표 컬럼
+   [관제] 컴플라이언스 > 감사 로그 : 번호 · 일시 · 화물 ID · 구분(화물/청구/재무) · 이벤트 · 이전 · 이후 · 누가 · 금액 · 비고
+   [관제] 컴플라이언스 > 결제 내역 : 결제일 · 화물 ID · 화물 · 화주 · 차주 · 수단 · 거래번호 · 금액 · 상태
+   [화주] 월별 인보이스            : 화물 ID · 화물 · 차주 · 결제일 · 결제 수단 · 거래번호 · 공급가액 · 부가세 · 합계
+
+   [파일 위치 변경 (3차 · 폴더 구조 개편)]  아래 본문의 옛 경로는 이렇게 읽으세요
+     backend/store.py          → backend/core/database.py(저장소) + backend/services/*_service.py(기능)
+     backend/deps.py           → backend/core/security.py
+     backend/schemas.py        → backend/schemas/{auth,order,settlement}_schema.py
+     backend/seed.py           → backend/core/seed.py
+     backend/geo.py            → backend/engines/matcher/spatial.py
+     backend/pricing.py        → backend/services/billing_service.py
+     backend/packing/*         → backend/engines/packer/* (baseline.py → py3dbp_engine.py)
+     backend/routers/*         → backend/api/endpoints/{auth,orders,matching,tracking,settlement}.py (API 주소는 그대로)
+     frontend/views/shipper.py · new_order.py → frontend/pages/1_shipper_portal.py
+     frontend/views/admin.py   → frontend/pages/2_control_tower.py
+     frontend/views/driver.py  → frontend/pages/4_driver_app.py
+     frontend/views/auth.py    → frontend/pages/0_auth.py
+     frontend/views/loading_guide.py → frontend/loading_guide.py
+     참고자료/tests/*           → tests/*
+
+ 이 문서의 구성
+   1부. 화면 표 컬럼      : 화면에 보이는 표의 한글 컬럼명 ↔ 실제 데이터 필드
+   2부. 데이터 필드        : 데이터 종류(엔티티)별 필드 — DB 테이블 설계할 때 출발점
+   3부. 입력(요청) 필드     : 화면 → 서버로 보내는 값
+   4부. 코드값 목록        : status 같은 필드에 들어가는 정해진 값들
+   5부. 단위 · 형식 규칙
+
+ [표기]  타입: str(문자) int(정수) float(소수) bool(참/거짓) list(목록) dict(묶음) datetime(날짜시간 문자열)
+         ★ = 저장(DB)해야 하는 원본 필드     ◇ = 다른 값으로 계산되는 필드(저장 안 해도 됨)
+         필드명은 실제 코드(backend/core/database.py · backend/services/ 등)와 똑같이 적었습니다.
+
+
+##############################################################################
+ 1부. 화면 표 컬럼 (화면에 보이는 이름 → 데이터 필드)
+##############################################################################
+
+ 1-1. [화주] 배차·실시간 관제 > 진행 중인 화물        frontend/views/shipper.py
+   화면 컬럼     데이터 필드                               설명
+   화물 ID       id                                        화물 번호 (ORD-날짜-순번)
+   화물          title                                     화물명
+   구간          origin → destination (앞 두 단어만)         상차지 → 하차지
+   차주          driver.name · driver.plate                차주 이름 · 차량번호
+                 (제안 중이면 '(제안) ' + matching.driver.name, 아니면 '매칭 대기')
+   운임          fare                                      원. 희망 운임 + 관제 보조금
+   상태          status_label (이상 있으면 '⚠ 이상감지',      매칭중이면 matching.state 에 따라
+                 매칭중이면 '기사 응답 대기'/'매칭 실패')      배차완료/배송중 …
+   진행률        progress ÷ 100                            0~100% 막대
+
+ 1-2. [화주] 정산·운송 이력                             frontend/views/shipper.py
+   화물 ID       id
+   완료일        delivered_at (YYYY.MM.DD)                 운송 완료(하차) 일시
+   화물          title
+   구간          origin → destination
+   차주          driver.name · driver.plate
+   최종 운임     total_fee                                 원. 운임 + 추가금 + 통행료
+   상태          status_label                              운송완료 / 정산완료
+   청구          billing_label                             청구 필요 / 승인 대기 / 입금 완료
+   상차 거리     match.pickup_km                           km. 배차 당시 기사 위치 → 상차지
+
+ 1-3. [화주] 정산 이력 엑셀 다운로드 (.xlsx)              backend/routers/shipper.py
+   화물 ID, 완료일시, 화물명, 차종, 상차지, 하차지, 차주, 차량번호,
+   기본 운임(fare), 추가금(extra_fee), 통행료(toll_fee), 합계(VAT별도)(total_fee),
+   상태(status_label), 청구 상태(billing_label), 상차 거리(km)(match.pickup_km),
+   부피 적재율(%)(match.volume_util×100), 인수증 해시(pod.hash)
+
+ 1-4. [화주] 신규 화물 등록 > 적재 품목 입력표 (편집 가능)   frontend/views/new_order.py
+   화면 컬럼             데이터 필드      타입    설명
+   품목                  name            str     품목명
+   길이(mm)              length          int     50~13,000
+   폭(mm)                width           int     50~2,500
+   높이(mm)              height          int     50~3,000
+   무게(kg)              weight          float   상자 1개 무게
+   수량                  qty             int     1~300
+   세움 고정             upright         bool    눕히기·뒤집기 금지
+   적층 불가             (stackable 반대)  bool    체크 = stackable False (위에 적재 금지)
+   상부 허용하중(kg)      max_top_load    float   빈칸 = 제한 없음
+   하차 순서             drop            int     1 = 가장 먼저 내림 (1~9)
+
+ 1-5. [화주] 신규 화물 등록 > 적재 순서표 (결과)            frontend/views/new_order.py
+   순서          load_order      몇 번째로 실었는지
+   ID            item_id         상자 번호 (S품목번호-순번, 예: S01-003)
+   품목          name
+   하차          drop            하차 순서
+   x / y / z     x, y, z         상자 모서리 좌표 (mm). x=운전석에서 거리, y=왼쪽 벽에서, z=바닥에서
+   길이/폭/높이   length, width, height   실제로 놓인 방향 기준 크기 (회전 반영)
+   무게(kg)      weight_kg
+   지지율        support_ratio   바닥 면적 중 받쳐지는 비율 (0~1)
+   상부하중(kg)   load_on_top     위에서 누르는 무게
+   회전          rotated         원래 방향과 다르게 놓였는지
+
+ 1-6. [차주] 수익·화주 청구 > 운송 완료 내역                frontend/views/driver.py
+   화물 ID       id
+   완료일        delivered_at
+   화물          title
+   화주          shipper                  화주 회사명
+   구간          origin → destination (첫 단어만)
+   기본 운임     fare
+   추가·통행료    extra_fee + toll_fee
+   합계          total_fee
+   청구 상태     billing_label
+
+ 1-7. [차주] 적재 가이드 > 하차 순서표                     frontend/views/loading_guide.py
+   순서          (화면에서 계산)     꺼내는 순서 = 실은 순서의 역순
+   ID            item_id
+   품목          name
+   무게(kg)      weight_kg
+   위치          (x, length, z 로 계산)  "뒷문에서 ○mm 안쪽 · 바닥/높이 ○mm"
+
+ 1-8. [관제] 이상 감지 로그                               frontend/views/admin.py
+   로그 ID       id                       LOG-날짜-번호
+   시각          at                       감지 시각
+   차량          plate · driver
+   유형          type_label               온도 이상 / 장시간 정체 / 경로 이탈
+   내용          text
+   위치          location                 발생 위치 설명
+   심각도        severity                 HIGH / MEDIUM / LOW
+   상태          status → 미해결/조치완료
+
+ 1-9. [관제] 매칭 분석 > 최근 배차 확정                     frontend/views/admin.py
+   화물 ID       id
+   화물          title
+   기사          driver
+   차종          truck_type               배정된 기사 차량
+   방식          by                       자동 / 관제 지정
+   상차 거리     pickup_km                km
+   부피 적재율   volume_util              0~1
+   점수          score × 100              0~100점
+   제안 횟수     offers
+   배차 소요     match_seconds            등록 → 배차 확정
+
+ 1-10. [관제] 매칭 분석 > 기사별 매칭 현황                  frontend/views/admin.py
+   기사 name · 차량 plate · 차종 truck_type · 현재 state(운행중/제안 대기/공차) ·
+   배정 건수 matched · 평균 상차 거리 avg_pickup_km · 받은 제안 offers · 수락률 accept_rate(%)
+
+ 1-11. [관제] 지도 마우스 툴팁                             frontend/views/admin.py
+   plate, truck_type, driver, status_text('배차 제안 응답 대기 (화물ID)' 포함),
+   speed(→ 'N km/h' 또는 '정차'), temp(→ '±N.N°C'), cargo
+
+ 1-12. [차주] 배차 제안 카드                              frontend/views/driver.py
+   응답 남은 시간  matching.expires_in       초 (제한 matching.timeout)
+   상차지까지      matching.pickup_km        km
+   운송            distance_km
+   제시 운임       fare
+   AI 적정 운임    fare_est.recommended · fare_est.gap_ratio(적정가 대비 ±%) · fare_est.fare_per_km
+   내 차량 적재율  matching.util             max(부피, 중량) 적재율
+   매칭 점수       matching.score × 100      (산식 안내 matching.formula)
+   후보 · 순위     matching.candidates, matching.offer_round
+   적재 계획 요약  packing (내 차량 기준)
+
+ 1-13. [차주] AI 매칭 추천 리스트 카드                     frontend/views/driver.py
+   추천 순위       rec.rank
+   매칭 점수       rec.score × 100
+   상차지까지      rec.pickup_km             km (도로 거리)
+   운송            distance_km
+   제시 운임       fare
+   AI 적정 운임    fare_est (배차 제안 카드와 같음)
+   내 차량 적재율  rec.util
+   적재 상자       packing.placed · packing.loaded_weight (내 차량 기준)
+   태그            rec.in_radius(False → '자동 제안 반경 밖'), rec.declined_by_me, urgent, cold_chain, incentive
+   잠금            rec.offered_to_other(응답 중인 기사 이름), rec.offer_left(남은 초)
+
+ 1-14. [화주] 운행 중 차량 지도 툴팁                       frontend/ui.py fleet_routes_map
+   title, id, status_label, progress(%), driver.name · driver.plate
+
+
+##############################################################################
+ 2부. 데이터 필드 (엔티티별) — DB 설계 출발점
+##############################################################################
+
+ ------------------------------------------------------------------------------
+ 2-1. 사용자 (users)                                   backend/store.py _create_user
+ ------------------------------------------------------------------------------
+   ★ id           str       U-0001
+   ★ email        str       로그인 ID (소문자로 저장, 중복 불가)
+   ★ role         str       shipper / driver / admin
+   ★ name         str       이름·담당자명
+   ★ phone        str       010-0000-0000
+   ★ org_id       str       소속 화주 ID(S-…) 또는 차주 ID(D-…). 관제는 없음
+   ★ sub          str       화면 부제 (회사명 또는 '차종 · 차량번호')
+   ★ salt, pw     str       비밀번호 해시(PBKDF2) — 원문 저장 안 함
+   ★ created_at   datetime
+   ★ documents    list      첨부 서류 [{kind: license/vehicle, filename, size}]
+   (로그인 토큰: tokens {토큰 → email} 별도 보관. DB 전환 시 세션 테이블 또는 JWT)
+
+ ------------------------------------------------------------------------------
+ 2-2. 화주 회사 (shippers)                              backend/seed.py SHIPPERS
+ ------------------------------------------------------------------------------
+   ★ id             str     S-001
+   ★ name           str     회사명
+   ★ biz_no         str     사업자등록번호
+
+ ------------------------------------------------------------------------------
+ 2-3. 차주 (drivers)                                    backend/seed.py DRIVERS
+ ------------------------------------------------------------------------------
+   ★ id           str     D-001
+   ★ name         str
+   ★ phone        str
+   ★ plate        str     차량번호 (예: 경기 88바 7712)
+   ★ truck_type   str     차종 (4부 코드값 참고) — 자동 매칭은 이 차종 기준으로 적재 시뮬레이션
+   ★ location     str     대기 위치/마지막 하차지 (지역 목록 주소) — 자동 매칭 거리 계산 기준
+   ★ month_runs   int     이번 달 운행 수 ◇
+
+ ------------------------------------------------------------------------------
+ 2-4. 화물 (orders)  ★ 가장 중요한 테이블                  backend/store.py _insert_order
+ ------------------------------------------------------------------------------
+   [기본 정보]
+   ★ id              str        ORD-YYYYMMDD-NN
+   ★ title           str        화물명
+   ★ truck_type      str        요청 차종
+   ★ cold_chain      bool       냉장 필요 여부
+   ★ urgent          bool       당일 긴급
+   ★ origin          str        상차지 주소 (지역 드롭다운 값, geo.REGION_LABELS — 목록 밖은 등록 거부)
+   ★ destination     str        하차지 주소 (같은 목록, 상차지와 같은 지역 불가)
+   ◇ distance_km     float      도로 거리 (route_cache.json)
+   ★ shipper_id      str        → shippers.id
+   ★ driver_id       str|null   → drivers.id (매칭 전 null)
+   ★ status          str        4부 '화물 상태'
+   ★ match_note      str|null   매칭 실패 사유 메모 (관제 화면 원인에 덧붙음)
+
+   [자동 매칭]  ★ 메인 기능
+   ★ posted_at       datetime   매칭 대기열 기준 시각 (등록 · 재공고 · 재매칭 시 갱신) — 대기 시간 · 처리 순서
+   ★ offer           dict|null  진행 중인 배차 제안
+                                {driver_id, offered_at, expires_at, timeout(제안 당시 제한시간 초),
+                                 pickup_km, volume_util, weight_util, util, score, candidates, round}
+   ★ declined        list[str]  거절 · 무응답 기사 ID (재공고 · 재매칭 시 초기화) → 후보에서 제외
+   ★ match_log       list       매칭 이력 [{at, event, label, driver_id, driver, note}]  → 별도 테이블 권장
+   ★ match_fail      list|null  후보가 없을 때 원인 문장 목록
+   ★ match_fail_at   datetime   매칭 실패가 시작된 시각
+   ★ match           dict|null  배차 확정 시 매칭 결과
+                                {driver_id, pickup_km, volume_util, weight_util, util, score, offers,
+                                 by(auto/pick/admin)}  (화면 응답에는 by_label 추가)
+
+   [금액]
+   ★ price           int        화주 희망 운임 (원)
+   ★ incentive       int        관제 보조금 누적 (원)
+   ◇ fare            int        price + incentive (차주가 받는 기본 운임)
+   ★ extra_fee       int        하차대기·경유 추가금
+   ★ toll_fee        int        통행료·기타
+   ◇ total_fee       int        fare + extra_fee + toll_fee
+   ★ fare_est        dict       AI 적정 운임 (등록 시점에 1회 계산해 저장)
+                                {recommended, band[하한, 상한], base, distance_km, per_km, weight_kg,
+                                 factors[{key, label, detail, amount}] (0원 항목 제외)}
+                                화면 응답에는 + fare, gap_ratio((fare − 적정) ÷ 적정), fare_per_km
+   ★ memo           str        청구서 메모
+   ★ billing         str|null   4부 '청구 상태'
+   ★ paid_days       float|null 청구 → 입금까지 걸린 일수
+
+   [시간]
+   ★ created_at      datetime   등록(또는 재공고) 시각 — 매칭 타이머 기준
+   ★ assigned_at     datetime   배차 시각
+   ★ started_at      datetime   운행 시작(상차 완료) 시각
+   ★ delivered_at    datetime   운송 완료(하차) 시각
+   ★ requested_at    datetime   청구서 발송 시각
+   ◇ period          str        delivered_at 의 YYYY-MM (이력 기간 필터용)
+   ◇ wait_seconds    int        매칭중일 때 posted_at 부터 경과 초
+
+   [운행 실시간]  ※ 실제 서비스에서는 GPS·센서에서 들어오는 값
+   ★ progress        float      진행률 0~100
+   ★ speed           int        km/h
+   ★ temp_set        float      설정 온도 ℃ (냉장만)
+   ★ temp_now        float      현재 온도 ℃
+   ★ deviated        bool       경로 이탈 여부
+   ★ delay_minutes   int        예상 지연(분)
+   ◇ eta_minutes     int        도착까지 남은 분
+   ◇ eta_clock       str        '오늘 18:45'
+   ◇ lat, lon        float      현재 위치 (위도, 경도) — 진행률만큼 도로 경로를 따라 이동한 지점
+   ◇ route           list       도로 경로 [[경도,위도], ...] 상차지 → 하차지 (캐시 없으면 두 점 직선)
+
+   [전자인수증 pod]  ★ (dict, 운송 완료 시 생성)
+     receiver        str        인수자 이름
+     signed_at       datetime   서명 시각
+     hash            str        위변조 확인용 해시 (0x…)
+
+   [적재 계획 packing]  ★ (dict, 품목을 함께 등록한 경우) — 2-6 참고
+     truck, placements, metrics, constraints, options, items
+   ★ packing_by_truck dict      차종별 재계산 결과 캐시 (자동 매칭 후보 평가 · 차주 차량이 다를 때)
+
+   [화면 응답에만 붙는 값]
+   ◇ status_label    str        상태 한글
+   ◇ billing_label   str        청구 상태 한글
+   ◇ shipper         str        화주 회사명
+   ◇ driver          dict       {id, name, phone, plate, truck_type}
+   ◇ anomaly         dict|null  진행 중 이상 {id, type, text}
+   ◇ packing         dict|null  요약 {truck, placed, volume_util, weight_util, loaded_weight}
+                                (배차 후 = 배정 차량 기준, 차주 제안 응답 = 그 차주 차량 기준)
+   ◇ matching        dict|null  매칭중일 때만. {state(OFFERED/FAILED/SEARCHING), round, declined, reasons,
+                                radius_km, timeout, formula('거리 60% + 적재율 40%'), fail_seconds,
+                                (제안 중) driver, pickup_km, volume_util, weight_util, util, score,
+                                candidates, offer_round, expires_in}
+   (관제 매칭 실패에만) recommended(AI 추천 운임), reasons(match_fail + 운임 차이)
+   (관제 직접 지정 후보) 기사 brief + location, pickup_km, fits, volume_util, weight_util, util, fit_note,
+                         busy, declined, in_radius, score
+
+ ------------------------------------------------------------------------------
+ 2-5. 이상 감지 로그 (anomalies)                          backend/store.py
+ ------------------------------------------------------------------------------
+   ★ id            str        LOG-YYYYMMDD-NNN
+   ★ order_id      str|null   → orders.id
+   ★ driver_id     str        → drivers.id
+   ★ type          str        COLD / STAGNATION / DEVIATION
+   ★ severity      str        HIGH / MEDIUM / LOW
+   ★ status        str        UNSOLVED / RESOLVED
+   ★ text          str        요약 (예: 콜드체인 온도 상승 (+6.8°C))
+   ★ detail        str        상세
+   ★ location      str        발생 위치 설명
+   ★ at            datetime   감지 시각
+   ★ resolved_at   datetime   조치 완료 시각
+   ◇ type_label, driver(이름), plate, phone, temp_now, temp_set   (화면 응답용)
+
+ ------------------------------------------------------------------------------
+ 2-6. 3D 적재 (packing)                                  backend/packing/
+ ------------------------------------------------------------------------------
+   [품목 items — 화주 입력]  ★
+     name, length, width, height (mm), weight (kg), qty, upright, stackable,
+     max_top_load (kg|null), drop
+
+   [차량 truck — 차종 제원]  backend/packing/trucks.py
+     name            str     차종
+     length/width/height  int  적재함 내부 치수 (mm)
+     max_weight_kg   float   최대 적재중량
+     refrigerated    bool    냉장 차량
+     side_access     bool    옆으로 하역 가능 (윙바디·카고)
+     volume_m3       float   ◇ 적재함 부피
+
+   [배치 결과 placements — 상자 1개 = 1행]  ★
+     item_id         str     S01-003
+     name            str
+     sku             int     품목 번호 (0부터)
+     x, y, z         int     모서리 좌표 (mm)
+     length/width/height  int  놓인 방향 기준 크기
+     weight_kg       float
+     load_order      int     싣는 순서
+     drop            int     하차 순서
+     upright, stackable  bool
+     max_top_load    float|null
+     orig            list    원래 크기 [길이, 폭, 높이]
+     rotated         bool    회전 여부
+     support_ratio   float   지지 비율 0~1
+     load_on_top     float   위에서 받는 하중 (kg)
+     ep              list    선택된 Extreme Point [x, y, z]
+
+   [지표 metrics]
+     placed, total, unplaced          int    적재/전체/미적재 상자 수
+     volume_util, weight_util         float  부피·중량 적재율 0~1
+     loaded_weight, requested_weight  float  kg
+     loaded_volume_m3                 float
+     max_height, used_length          int    mm
+     cog {x, y, z, x_ratio, y_offset_ratio}  무게중심 좌표와 비율
+     elapsed_ms                       float  계산 시간
+
+   [제약 검증 constraints — 항목별 1행]
+     key        str     4부 '제약 키'
+     name       str     한글 이름
+     rule       str     규칙 설명
+     status     str     pass / warn / fail
+     detail     str     결과 설명
+     violations list    위반 상자 item_id 목록
+
+   [미적재 unplaced]  item_id, name, sku, reason
+   [차종 검토 candidates]  truck_type, evaluated, placed, total, volume_util, weight_util, fits, note
+   [옵션 options]  merit, sort, min_support, lifo (+ 내부용 record_steps, max_step_snapshots)
+   [단계 steps]  단계별 후보 EP 좌표 목록 (화면 재생용, 저장 안 함)
+   [비교 baseline]  name, placements, unplaced, metrics, constraints  (py3dbp 결과)
+
+   [팀 공통 적재 계획 포맷]  GET /orders/{id}/packing  (packing_sample.json 과 동일)
+     order_id, unit('mm'), axis_note,
+     container {name, length, width, height, max_weight_kg},
+     items [{item_id, name, x, y, z, length, width, height, weight_kg, load_order}]
+     (+ 이 서비스 확장: metrics, constraints, placements, unplaced, planned_truck, truck,
+        replanned, title, origin, destination)
+
+ ------------------------------------------------------------------------------
+ 2-7. 화면용 집계 응답 (저장하지 않고 매번 계산 ◇)
+ ------------------------------------------------------------------------------
+   화주 요약  /shipper/summary
+     orders_30d, active, matching, offered, match_failed, anomalies, avg_match_seconds,
+     avg_volume_util, settled_30d, unpaid, invoices_waiting, pod_count, done_count
+
+   차주 프로필  /driver/profile
+     id, name, phone, plate, truck_type, month_runs, location,
+     state(공차 대기/배차 제안 도착/상차지 이동/운행중), run(진행 중 화물), offer_id,
+     offers, accepted, accept_rate, paid_30d, paid_30d_count,
+     receivable, receivable_count, unbilled_count, pod_rate, avg_settle_days
+
+   차주 배차 제안  /driver/offer   → 화물 화면 응답(2-4) 그대로, 없으면 null
+   차주 AI 추천    /driver/recommendations → 화물 화면 응답(2-4) + packing(내 차량 기준) +
+     rec {rank, pickup_km, util, volume_util, weight_util, score, in_radius, declined_by_me,
+          offered_to_other, offer_left}
+   차주 제안 결과  /driver/offers/history
+     match_log 항목 + order_id, title, origin, destination, fare
+
+   관제 요약  /admin/summary
+     vehicles, in_transit, empty, cold, avg_speed, anomalies_open, avg_response_seconds,
+     matching, offers_pending, failed_matches
+
+   관제 응답 대기 제안  /admin/offers   → 화물 화면 응답 목록 (남은 시간 짧은 순)
+
+   차량 위치  /admin/fleet   (차량 1대 = 1행)
+     id, plate, driver, truck_type, kind, lat, lon, speed, status_text, order_id,
+     cargo, temp, named(등록 차주 여부)
+
+   직접 지정 후보  /admin/failed-matches/{id}/candidates   (전량 적재 + 지금 비어 있는 기사, 가까운 순 5명)
+     id, name, phone, plate, truck_type, location, pickup_km, fits, volume_util, weight_util, util,
+     fit_note, busy, declined, in_radius, score
+
+   매칭 분석  /admin/matching
+     kpi {match_success_rate, auto_rate, avg_match_seconds, avg_pickup_km, avg_volume_util, accept_rate}
+     settings  → 아래 '매칭 설정'과 같음
+     pickup_dist [{range, count}]
+     truck_mix [{truck_type, count}]
+     recent [{id, title, driver, truck_type, pickup_km, volume_util, score, offers, by, match_seconds, assigned_at}]
+     drivers [{name, plate, truck_type, matched, avg_pickup_km, offers, accept_rate, state}]
+
+   매칭 설정  /admin/matching/settings  (저장: 메모리 store.settings · settings_log)
+     radius_km(탐색 반경 km), timeout_sec(수락 제한 초), w_dist(거리 가중치 0~1), w_util(= 1 − w_dist),
+     formula('거리 N% + 적재율 N%'), defaults{radius_km, timeout_sec, w_dist},
+     log [{at, by(관제 담당자), changes[바뀐 항목 문장], note('매칭 실패 N건 → N건')}] (최근 8건, 최신순)
+
+   AI 운임  /pricing/estimate
+     truck_type, distance_km(도로), per_km, min_fare, weight_kg, base, recommended, band [하한, 상한],
+     factors [{key(weight/weather/urgent/wait/work), label, detail, amount}]
+
+   로그인 화면 지표  /meta
+     truck_types, cold_types, demo_accounts [{role, email, name, sub}],
+     stats {vehicles, moving, orders_today},
+     regions [지역 드롭다운 주소 40곳], matching (위 '매칭 설정'과 같음)
+
+
+##############################################################################
+ 3부. 입력(요청) 필드 — 화면 → 서버                        backend/schemas.py
+##############################################################################
+   로그인            POST /auth/login          email, password
+   회원가입          POST /auth/register       role, email, password, name, phone,
+                     (multipart 폼)            company, biz_no, plate, truck_type, base_location,
+                                               approval_code, license_photo(파일), vehicle_photo(파일)
+   AI 운임           POST /pricing/estimate    truck_type, origin, destination, cold_chain, urgent, wait_minutes,
+                                               weight_kg(선택, 적재 시뮬레이션 총중량 → 중량 할증)
+   매칭 설정 변경    PUT /admin/matching/settings  radius_km(10~200), timeout_sec(15~300), w_dist(0~1)
+   적재 시뮬레이션    POST /packing/plan        items[ ] (1-4 필드), truck_type(null=자동),
+                                               cold_chain, options{merit, sort, min_support, lifo},
+                                               compare_baseline
+   화물 등록         POST /shipper/orders      title, truck_type, origin, destination, price, urgent,
+                     (→ 즉시 자동 매칭)         cold_chain, temp_set, items[ ](선택), packing_options
+   제안 수락 · 거절  POST /driver/offer/{id}/accept · /decline   (바디 없음)
+   AI 추천 수락      POST /driver/recommendations/{id}/accept     (바디 없음)
+   청구서 발송       POST …/invoice            extra_fee, toll_fee, memo
+   하차 완료         POST …/complete           receiver
+   보조금 재공고     POST …/incentive          amount (1~300,000원)
+   재매칭            POST …/rematch            (바디 없음)
+   직접 배차         POST …/assign             driver_id
+   이상 조치 완료    POST …/resolve            (바디 없음)
+   이력 조회 필터    GET /shipper/history      q, status, period
+   이상 로그 필터    GET /admin/anomalies      type, status
+
+
+##############################################################################
+ 4부. 코드값 목록 (정해진 값만 들어가는 필드)
+##############################################################################
+   role (사용자 역할)         shipper=화주, driver=차주, admin=관제
+   status (화물 상태)         MATCHING=매칭중, ASSIGNED=배차완료, IN_TRANSIT=배송중,
+                             DELIVERED=운송완료, SETTLED=정산완료
+   billing (청구 상태)        UNBILLED=청구 필요, REQUESTED=승인 대기, PAID=입금 완료
+   anomaly.type              COLD=온도 이상, STAGNATION=장시간 정체, DEVIATION=경로 이탈
+   anomaly.severity          HIGH, MEDIUM, LOW
+   anomaly.status            UNSOLVED=미해결, RESOLVED=조치완료
+   matching.state            OFFERED=기사 응답 대기, FAILED=매칭 실패, SEARCHING=후보 탐색 중
+   match_log.event           offered=배차 제안, accepted=기사 수락·배차 확정, declined=기사 거절,
+                             expired=응답 없음(시간 초과), assigned=관제 직접 배차, reposted=보조금 재공고,
+                             rematch=관제 재매칭, cancelled=제안 취소, picked=기사 직접 수락(AI 추천 리스트)
+   match.by                  auto=자동 매칭(기사 수락), pick=AI 추천 수락, admin=관제 직접 지정
+   fleet.kind (지도 색)       transit=운행중, cold=콜드체인, empty=공차, anomaly=이상 감지
+   driver_profile.state      공차 대기, 배차 제안 도착, 상차지 이동, 운행중
+   truck_type (차종)          1톤 카고, 5톤 윙바디, 5톤 냉동탑차, 11톤 탑차, 11톤 냉동탑차, 25톤 무진동
+   options.merit             wall=벽 쌓기, floor=바닥 우선
+   options.sort              area_height=면적-높이 군집, volume=부피, weight=무게
+   constraints.key           compat=차량 호환, bounds=경계, overlap=비중첩, orientation=방향,
+                             weight=최대 중량, support=지지면, stacking=적층·상부하중,
+                             lifo=하차 순서, cog=무게중심(권고)
+   constraints.status        pass=통과, warn=권고 위반(경고), fail=필수 위반
+   estimate.factors.key      weather=기상, urgent=긴급성, wait=대기시간, work=작업·적재 조건
+
+
+##############################################################################
+ 5부. 단위 · 형식 규칙 (팀 공통으로 맞출 것)
+##############################################################################
+   길이·좌표            mm (정수)            적재함·상자 크기, x/y/z
+   거리                 km (소수 1자리)      distance_km, pickup_km
+   무게                 kg                   weight, weight_kg, max_top_load
+   금액                 원 (정수, VAT 별도)   price, fare, total_fee …
+   비율                 0~1 소수              volume_util, support_ratio …  (화면에서 % 로 표시)
+   단, 퍼센트 그대로    %                     pod_rate, accept_rate, match_success_rate, auto_rate (0~100)
+   매칭 점수            0~1 소수              score (화면에서 ×100 '점')
+   온도                 ℃ (소수 1자리)
+   속도                 km/h (정수)
+   날짜시간             ISO 문자열            2026-11-13T09:35:33 (서버 기준 현지 시각)
+   좌표                 위도 lat, 경도 lon    ※ 지도·경로 배열은 [경도, 위도] 순서 (route)
+   3D 좌표              x=운전석 쪽 벽에서, y=왼쪽 벽에서, z=바닥에서 (상자 모서리 기준)
+   ID 형식              ORD-YYYYMMDD-NN, LOG-YYYYMMDD-NNN, S-001, D-001, U-0001, 상자 S01-001
+
+   ※ 비율이 0~1 인 필드와 0~100(%) 인 필드가 섞여 있습니다. DB 설계 때 하나로 통일하는 것을 권장합니다.
+   ※ 시간대(타임존) 정보가 없습니다. 실제 서비스에서는 UTC 저장 + 화면에서 한국 시간 변환을 권장합니다.

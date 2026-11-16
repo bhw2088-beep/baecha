@@ -1,0 +1,41 @@
+==============================================================
+ 배차의 민족 실행 방법 (VS Code + Docker)
+==============================================================
+
+[준비] 처음 한 번만
+1. Docker Desktop 실행 (작업 표시줄에 고래 아이콘이 보이면 OK)
+2. VS Code → 파일 → 폴더 열기 → 압축을 푼 baecha 폴더 선택
+   (신뢰 여부를 물으면 "Yes, I trust the authors")
+3. 왼쪽 확장(네모 4개) → "Container Tools" 검색 → Microsoft 것 설치
+4. VS Code 터미널 열기 (Ctrl + `) → 아래 입력
+     copy .env.example .env
+   왼쪽 탐색기에서 .env 를 열어 change-me 두 곳을 같은 비밀번호로 바꾸고 저장 (Ctrl + S)
+
+[실행]
+5. 터미널에 입력 (처음엔 몇 분 걸림)
+     docker compose up --build -d
+6. 왼쪽 컨테이너 아이콘 → baecha 아래 6개가 초록색 ▶ 이면 실행 완료
+   (db · redis · backend · worker · simulator · frontend)
+
+[화면 보기]
+7. 컨테이너 목록에서 frontend 오른쪽 클릭 → Open in Integrated Browser
+   (또는 Ctrl+Shift+P → "Browser: Open Integrated Browser" → http://localhost:8501)
+8. 데모 계정 [접속] 버튼으로 로그인 · 비밀번호 baecha1234
+     화주 logistics@samsung.com / 차주 driver.kim@baecha.co.kr / 관제 admin.control@baecha.co.kr
+
+[그 밖의 주소]
+   휴대폰 3D 적재 가이드  http://localhost:8000/m/  (휴대폰: 같은 와이파이에서 http://<PC IP>:8000/m/)
+   API 문서              http://localhost:8000/docs
+
+[자주 쓰는 동작]
+   로그 보기        컨테이너 오른쪽 클릭 → View Logs
+   끄기            docker-compose.yml 오른쪽 클릭 → Compose Down  (또는 터미널 docker compose down)
+   다시 켜기        docker-compose.yml 오른쪽 클릭 → Compose Up    (또는 docker compose up -d)
+   코드 수정 반영   터미널에 docker compose up --build -d
+   데이터 처음으로   관제 계정 → 왼쪽 [데모 데이터 초기화]
+
+[안 될 때]
+   - 컨테이너 목록에 "Failed to connect · Podman" → "Configure container runtime" → Docker 선택
+   - "docker 명령을 찾을 수 없음" → Docker Desktop 이 켜져 있는지 확인
+   - 화면이 안 뜸 → 1~2분 기다린 뒤 새로고침, 컨테이너가 모두 초록색인지 확인
+   - "port is already allocated" → 이미 켜진 서버를 끄고 다시 실행

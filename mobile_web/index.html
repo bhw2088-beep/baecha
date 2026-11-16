@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#4F46E5">
+  <title>배차의 민족 · 적재 가이드</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;800&display=swap">
+  <link rel="stylesheet" href="css/mobile_style.css">
+</head>
+<body>
+  <!-- 차주용 모바일 웹 (Phase 7): 휴대폰으로 상차 순서를 3D 로 보며 적재한다.
+       PC: http://localhost:8000/m/   휴대폰(같은 와이파이): http://<PC IP>:8000/m/ -->
+  <header class="top">
+    <div class="brand"><span class="mark"></span>배차의 민족 <small>적재 가이드</small></div>
+    <button id="logout" class="ghost" hidden>로그아웃</button>
+  </header>
+
+  <!-- 로그인 -->
+  <section id="login" class="card" hidden>
+    <h1>차주 로그인</h1>
+    <p class="muted">배차받은 화물의 상차 순서를 3D 로 안내합니다.</p>
+    <label>이메일<input id="email" type="email" autocomplete="username" placeholder="driver@example.com"></label>
+    <label>비밀번호<input id="password" type="password" autocomplete="current-password"></label>
+    <button id="loginBtn" class="primary">로그인</button>
+    <p id="loginErr" class="err" hidden></p>
+    <p class="muted small">데모 차주 계정은 PC 화면의 로그인 페이지 '데모 계정' 안내를 참고하세요.</p>
+  </section>
+
+  <!-- 화물 선택 -->
+  <section id="jobs" hidden>
+    <div class="card hello"><div id="hello"></div><div id="state" class="pill"></div></div>
+    <h2>적재 가이드를 볼 화물</h2>
+    <div id="jobList"></div>
+  </section>
+
+  <!-- 3D 적재 가이드 -->
+  <section id="viewer" hidden>
+    <div class="card head">
+      <button id="back" class="ghost">← 목록</button>
+      <div><div id="vTitle" class="strong"></div><div id="vSub" class="muted small"></div></div>
+    </div>
+    <div id="stage"><div id="stageMsg" class="muted">3D 화면을 준비하는 중…</div></div>
+    <div class="card step">
+      <div class="row"><div><div class="muted small">상차 순서</div><div id="stepNo" class="big"></div></div>
+        <div class="right"><div class="muted small">이번 상자</div><div id="stepName" class="strong"></div></div></div>
+      <div id="stepWhere" class="muted small"></div>
+      <input id="slider" type="range" min="0" value="0">
+      <div class="btns"><button id="prev" class="ghost">이전</button><button id="play" class="primary">자동 재생</button>
+        <button id="next" class="ghost">다음</button></div>
+    </div>
+    <div class="card"><div id="metrics" class="metrics"></div>
+      <p class="muted small">x = 운전석 쪽(0) → 뒷문 쪽 · 먼저 실은 상자가 안쪽(운전석 쪽)에 놓입니다. 두 손가락으로 확대 · 한 손가락으로 회전.</p></div>
+  </section>
+
+  <footer class="muted small">모의 데이터 기반 시연용 화면입니다.</footer>
+
+  <!-- Three.js r147 (CDN, 비모듈 빌드 — r148 부터는 examples/js 가 없어 r147 고정) + 회전 컨트롤 -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="js/load_visualizer.js"></script>
+</body>
+</html>

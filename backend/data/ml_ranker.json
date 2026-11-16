@@ -1,0 +1,27 @@
+{
+  "model": "LightGBM (binary)",
+  "data": "가상 데이터 (기사 수락 행동 시뮬레이션)",
+  "samples": 8000,
+  "train": 6400,
+  "test": 1600,
+  "accept_ratio": 0.745,
+  "auc": 0.857,
+  "features": [
+    "pickup_km",
+    "util",
+    "fare_gap",
+    "trip_km",
+    "cold",
+    "urgent",
+    "accept_rate"
+  ],
+  "importance": {
+    "pickup_km": 16632,
+    "util": 1316,
+    "fare_gap": 4496,
+    "trip_km": 2181,
+    "cold": 185,
+    "urgent": 147,
+    "accept_rate": 1798
+  }
+}

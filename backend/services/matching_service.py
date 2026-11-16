@@ -1,0 +1,542 @@
+"""
+배차 매칭 서비스 (메인 기능) — 3단계 하이브리드 매칭
+
+  ① 공간 필터  (engines/matcher/spatial.py)  PostGIS ST_DWithin 으로 상차지 반경 안의 기사만
+  ② 스코어링   기사 차량 기준 3D 적재 시뮬레이션(전량 적재 + 필수 제약) 통과 차량에 대해
+              규칙 점수 = 거리 w_dist + 적재율 (1 − w_dist)
+              + LightGBM 수락 예측 (engines/matcher/ml_ranker.py · 가상 데이터 학습)
+              최종 점수 = 규칙 70% + ML 30%  (config.ML_WEIGHT)
+  ③ 최적 배정  (engines/matcher/hungarian.py)  대기 화물 전체 × 빈 기사 전체를 헝가리안으로 1:1 배정
+              → 배정된 기사에게 배차 제안 (Redis 분산 락 안에서 실행)
+  제안 : settings.timeout_sec 안에 수락하면 배차 확정 / 거절·시간 초과면 다시 배정 라운드
+  후보 없음 : 관제 '매칭 실패' (원인 표시) → 보조금 재공고 · 재매칭 · 기사 직접 지정
+  AI 추천 리스트 : 기사가 '내 차량에 전량 실리는 매칭 대기 화물'을 점수 순으로 보고 직접 수락
+
+Store 에 섞어 쓰는 Mixin 이다 (데이터는 core/database.py 의 Store 가 가진다).
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime, timedelta
+from statistics import mean
+
+from ..config import DEFAULT_SETTINGS, ML_WEIGHT, SETTING_LABEL
+from ..core.errors import ApiError
+from ..core.redis_client import lock as redis_lock
+from ..engines.matcher import hungarian, ml_ranker
+from ..engines.matcher import spatial as geo
+from ..models.order import MATCH_BY_LABEL, MATCH_EVENT_LABEL, _iso
+from . import billing_service as pricing
+
+
+def _tons(truck_type: str) -> float:
+    m = re.match(r"(\d+)", truck_type)
+    return float(m.group(1)) if m else 0.0
+
+
+def is_compatible(driver_truck: str, cargo_truck: str, cold_chain: bool) -> bool:
+    """적재 계획(품목)이 없는 화물에만 쓰는 간이 판정: 냉장 조건 + 요청 톤수의 1~2.5배 차량."""
+    if cold_chain and driver_truck not in pricing.COLD_TYPES:
+        return False
+    d, c = _tons(driver_truck), _tons(cargo_truck)
+    return c <= d <= c * 2.5
+
+
+def match_score(pickup_km: float, util: float, radius_km: float = 50, w_dist: float = 0.6) -> float:
+    """0~1. 가까울수록(반경 대비), 적재함을 많이 채울수록 높다."""
+    dist = max(0.0, 1 - pickup_km / radius_km)
+    return round(w_dist * dist + (1 - w_dist) * max(0.0, min(1.0, util)), 4)
+
+
+class MatchingMixin:
+    # ------------------------------------------------------------------ 자동 매칭 엔진
+    def _score(self, pickup_km: float, util: float) -> float:
+        return match_score(pickup_km, util, self.settings["radius_km"], self.settings["w_dist"])
+
+    def settings_view(self) -> dict:
+        s = self.settings
+        return {**s, "w_util": round(1 - s["w_dist"], 2), "defaults": DEFAULT_SETTINGS,
+                "formula": f"거리 {s['w_dist'] * 100:.0f}% + 적재율 {(1 - s['w_dist']) * 100:.0f}%",
+                "ml_weight": ML_WEIGHT,
+                "pipeline": (f"① PostGIS 반경 {s['radius_km']}km 필터 → ② 규칙 점수(거리 {s['w_dist'] * 100:.0f}% + "
+                             f"적재율 {(1 - s['w_dist']) * 100:.0f}%) {100 - ML_WEIGHT * 100:.0f}% + "
+                             f"AI 수락 예측 {ML_WEIGHT * 100:.0f}% → ③ 헝가리안 최적 배정"),
+                "log": self.settings_log[-8:][::-1]}
+
+    def update_settings(self, new: dict, by: str) -> dict:
+        """관제 설정 변경 → 매칭 실패 화물부터 새 기준으로 바로 다시 매칭 (진행 중인 제안은 그대로 둔다)."""
+        new = {**new, "w_dist": round(new["w_dist"], 2)}
+        changes = []
+        for k, (label, unit) in SETTING_LABEL.items():
+            if new[k] != self.settings[k]:
+                fmt = (lambda v: f"{v * 100:.0f}%") if k == "w_dist" else (lambda v: f"{v}{unit}")
+                changes.append(f"{label} {fmt(self.settings[k])} → {fmt(new[k])}")
+        if not changes:
+            return self.settings_view()
+        self.settings.update(new)
+        now = datetime.now()
+        before = sum(1 for o in self.orders.values() if o["status"] == "MATCHING" and o["match_fail"])
+        self._matching_tick()
+        after = sum(1 for o in self.orders.values() if o["status"] == "MATCHING" and o["match_fail"])
+        self.settings_log.append({"at": _iso(now), "by": by, "changes": changes,
+                                  "note": f"매칭 실패 {before}건 → {after}건"})
+        return self.settings_view()
+
+    def _log(self, o: dict, event: str, driver_id: str | None, at: datetime, note: str = ""):
+        d = self.drivers.get(driver_id) if driver_id else None
+        o["match_log"].append({"at": _iso(at), "event": event, "label": MATCH_EVENT_LABEL[event],
+                               "driver_id": driver_id, "driver": d["name"] if d else None, "note": note})
+
+    @staticmethod
+    def _offer_count(o: dict) -> int:
+        return sum(1 for e in o["match_log"] if e["event"] == "offered")
+
+    def _pending_offer_of(self, driver_id: str) -> dict | None:
+        return next((o for o in self.orders.values()
+                     if o["status"] == "MATCHING" and o["offer"] and o["offer"]["driver_id"] == driver_id), None)
+
+    def _driver_busy(self, driver_id: str, except_order: str | None = None) -> bool:
+        """운행 중이거나 다른 화물의 제안에 답하는 중이면 새 제안을 받을 수 없다."""
+        if self._active_run_of(driver_id):
+            return True
+        pending = self._pending_offer_of(driver_id)
+        return pending is not None and pending["id"] != except_order
+
+    def _fit(self, o: dict, truck_type: str) -> dict:
+        """그 차종에 이 화물이 전량 · 필수 제약 충족으로 실리는지 + 적재율."""
+        if not o["packing"]:
+            ok = is_compatible(truck_type, o["truck_type"], o["cold_chain"])
+            util = min(1.0, _tons(o["truck_type"]) / max(_tons(truck_type), 1)) if ok else 0.0
+            return {"fits": ok, "volume_util": None, "weight_util": None, "util": util,
+                    "fit_note": "차종 규격 기준 (적재 계획 없음)" if ok else "차량 규격 불일치"}
+        res = self._plan_for_truck(o, truck_type)
+        failed = [c["name"] for c in res["constraints"] if c["status"] == "fail"]
+        unplaced = len(res.get("unplaced", []))  # 등록 시 저장된 계획은 전량 적재가 보장되어 키가 없음
+        m = res["metrics"]
+        fits = not failed and unplaced == 0
+        note = "전량 적재" if fits else (f"{unplaced}개 미적재" if unplaced else "제약 위반: " + ", ".join(failed))
+        return {"fits": fits, "volume_util": m["volume_util"], "weight_util": m["weight_util"],
+                "util": max(m["volume_util"], m["weight_util"]), "fit_note": note}
+
+    # ---- 2단계 점수: 규칙 점수(거리 · 적재율) + LightGBM 수락 예측
+    def _accept_rates(self) -> dict[str, float]:
+        """기사별 과거 제안 수락률 (ML 피처). 매칭 라운드 동안은 한 번 계산한 값을 쓴다."""
+        cached = getattr(self, "_rates_cache", None)
+        if cached is not None:
+            return cached
+        rates = {}
+        for d in self.drivers.values():
+            r = self._driver_offer_stats(d["id"])["accept_rate"]
+            rates[d["id"]] = r / 100 if r is not None else 0.7
+        return rates
+
+    def _ml_features(self, o: dict, driver_id: str, km: float, util: float, rates: dict) -> dict:
+        return {"pickup_km": km, "util": util, "fare_gap": self._fare_est(o)["gap_ratio"],
+                "trip_km": o["distance_km"], "cold": float(o["cold_chain"]), "urgent": float(o["urgent"]),
+                "accept_rate": rates.get(driver_id, 0.7)}
+
+    def _combine(self, rule: float, ml: float) -> float:
+        return round((1 - ML_WEIGHT) * rule + ML_WEIGHT * ml, 4)
+
+    def _pair_score(self, o: dict, driver_id: str, km: float, util: float) -> dict:
+        """화물 × 기사 한 쌍의 점수 (추천 리스트 · 배차 확정 기록용)."""
+        rule = self._score(km, util)
+        ml = ml_ranker.predict([self._ml_features(o, driver_id, km, util, self._accept_rates())])[0]
+        return {"rule_score": rule, "ml_prob": ml, "score": self._combine(rule, ml)}
+
+    def _evaluate(self, o: dict) -> list[dict]:
+        """등록된 모든 기사를 이 화물 기준으로 평가.
+        ① PostGIS 반경 필터 → ② 도로거리 · 3D 적재 시뮬레이션 · 규칙 점수 + LightGBM 수락 예측."""
+        origin = geo.geocode(o["origin"])
+        radius = self.settings["radius_km"]
+        near = geo.drivers_within(origin, radius) if getattr(self, "db", None) else None  # ① ST_DWithin
+        rates = self._accept_rates()
+        fit_cache: dict[str, dict] = {}
+        rows = []
+        for d in self.drivers.values():
+            if not d.get("approved", True):
+                continue  # 관제 가입 승인 전인 기사는 매칭 후보에서 제외
+            t = d["truck_type"]
+            if t not in fit_cache:
+                fit_cache[t] = self._fit(o, t)
+            f = fit_cache[t]
+            km = round(geo.route_km(self._driver_coord(d), origin), 1)
+            spatial_ok = near is None or d["id"] in near or self._active_run_of(d["id"]) is not None
+            rows.append({
+                **self.driver_brief(d["id"]), "location": d["location"], "pickup_km": km, **f,
+                "busy": self._driver_busy(d["id"], except_order=o["id"]),
+                "declined": d["id"] in o["declined"], "in_radius": spatial_ok and km <= radius,
+                "rule_score": self._score(km, f["util"]) if f["fits"] else None, "ml_prob": None, "score": None,
+            })
+        fit_rows = [r for r in rows if r["fits"]]
+        probs = ml_ranker.predict([self._ml_features(o, r["id"], r["pickup_km"], r["util"], rates)
+                                   for r in fit_rows])
+        for r, p in zip(fit_rows, probs):
+            r["ml_prob"], r["score"] = p, self._combine(r["rule_score"], p)
+        return rows
+
+    @staticmethod
+    def _ranking(rows: list[dict]) -> list[dict]:
+        ok = [r for r in rows if r["fits"] and not r["busy"] and not r["declined"] and r["in_radius"]]
+        return sorted(ok, key=lambda r: (-r["score"], r["pickup_km"]))
+
+    def _fail_reasons(self, o: dict, rows: list[dict]) -> list[str]:
+        fit = [r for r in rows if r["fits"]]
+        reasons = []
+        if not fit:
+            reasons.append("등록 차량 중 이 화물을 전량 적재할 수 있는 차량이 없음")
+        else:
+            free = [r for r in fit if not r["busy"] and not r["declined"]]
+            if not free:
+                reasons.append(f"적재 가능 차량 {len(fit)}대 모두 운행 중 · 다른 제안 대기 중 · 거절")
+            elif not any(r["in_radius"] for r in free):
+                nearest = min(r["pickup_km"] for r in free)
+                reasons.append(f"반경 {self.settings['radius_km']}km 내 적재 가능한 공차 없음 "
+                               f"(가장 가까운 공차 {nearest:.0f}km)")
+        if o["declined"]:
+            reasons.append(f"기사 {len(o['declined'])}명 거절 · 응답 없음")
+        if o["match_note"]:
+            reasons.append(o["match_note"])
+        return reasons or ["제안할 수 있는 기사 없음"]
+
+    def _run_matching(self, o: dict | None = None, now: datetime | None = None):
+        """(이전 이름 유지) 매칭 라운드를 한 번 돌린다 — 화물 하나가 아니라 대기 화물 전체를 함께 배정."""
+        self._matching_round(now)
+
+    def _matching_round(self, now: datetime | None = None):
+        """③ 헝가리안 최적 배정: 제안 중이 아닌 매칭 대기 화물 전체 × 비어 있는 기사 전체를 한 번에 1:1 배정.
+        배정된 쌍에는 배차 제안을 보내고, 후보가 없는 화물은 실패 원인을 기록한다.
+        여러 서버(워커)가 동시에 배정하지 않도록 Redis 분산 락 안에서 실행한다."""
+        with redis_lock("matching") as got:
+            if not got:
+                return  # 다른 워커가 배정 중 → 다음 요청 때 다시
+            now = now or datetime.now()
+            pending = sorted((o for o in self.orders.values() if o["status"] == "MATCHING" and not o["offer"]),
+                             key=lambda o: o["posted_at"])
+            if not pending:
+                return
+            self._rates_cache = self._accept_rates()
+            try:
+                evals = {o["id"]: self._evaluate(o) for o in pending}
+            finally:
+                self._rates_cache = None
+            rankings = {oid: self._ranking(rows) for oid, rows in evals.items()}
+            score = {(oid, r["id"]): r["score"] for oid, ranking in rankings.items() for r in ranking}
+            order_ids = [o["id"] for o in pending]
+            driver_ids = sorted({d for _, d in score})
+            pairs = hungarian.assign(order_ids, driver_ids, score)
+            greedy = hungarian.greedy(order_ids, driver_ids, score)
+            if score:
+                self.last_round = {"at": _iso(now), "orders": len(pending), "drivers": len(driver_ids),
+                                   "assigned": len(pairs), "total": round(sum(s for *_, s in pairs), 3),
+                                   "greedy_assigned": len(greedy), "greedy_total": round(sum(s for *_, s in greedy), 3)}
+            assigned = {oid: (did, s) for oid, did, s in pairs}
+            for o in pending:
+                ranking = rankings[o["id"]]
+                if o["id"] in assigned:
+                    did, s = assigned[o["id"]]
+                    top = next(r for r in ranking if r["id"] == did)
+                    rank = [r["id"] for r in ranking].index(did) + 1
+                    o["match_fail"], o["match_fail_at"], o["match_wait"] = None, None, None
+                    o["offer"] = {
+                        "driver_id": did, "offered_at": now,
+                        "expires_at": now + timedelta(seconds=self.settings["timeout_sec"]),
+                        "timeout": self.settings["timeout_sec"],
+                        "pickup_km": top["pickup_km"], "volume_util": top["volume_util"],
+                        "weight_util": top["weight_util"], "util": top["util"], "score": s,
+                        "rule_score": top["rule_score"], "ml_prob": top["ml_prob"], "rank": rank,
+                        "candidates": len(ranking), "round": self._offer_count(o) + 1, "assign": "hungarian",
+                    }
+                    self._log(o, "offered", did, now,
+                              note=f"헝가리안 최적 배정 · 후보 {len(ranking)}대 중 {rank}순위 · 점수 {s * 100:.0f} "
+                                   f"(AI 수락 예측 {top['ml_prob'] * 100:.0f}%)")
+                elif not ranking:
+                    if o["match_fail"] is None:
+                        o["match_fail_at"] = now
+                    o["match_fail"], o["match_wait"] = self._fail_reasons(o, evals[o["id"]]), None
+                else:
+                    # 후보는 있지만, 전체 최적 배정에서 그 기사들이 다른 화물에 배정됨 → 다음 라운드 대기
+                    o["match_fail"], o["match_fail_at"] = None, None
+                    o["match_wait"] = f"후보 {len(ranking)}대가 모두 다른 화물에 최적 배정됨 → 다음 배정 대기"
+
+    def _matching_tick(self):
+        """제안 시간 초과 처리 → 제안이 없는 매칭 대기 화물(실패 포함) 전체를 헝가리안으로 다시 배정."""
+        now = datetime.now()
+        for o in self.orders.values():
+            off = o["offer"] if o["status"] == "MATCHING" else None
+            if off and now >= off["expires_at"]:
+                o["declined"].append(off["driver_id"])
+                self._log(o, "expired", off["driver_id"], now)
+                o["offer"] = None
+        self._matching_round(now)
+
+    def _assign(self, o: dict, driver_id: str, by: str):
+        now = datetime.now()
+        d = self.drivers[driver_id]
+        f = self._fit(o, d["truck_type"])
+        km = round(geo.route_km(self._driver_coord(d), geo.geocode(o["origin"])), 1)
+        ps = self._pair_score(o, driver_id, km, f["util"]) if f["fits"] else {}
+        o["match"] = {"driver_id": driver_id, "pickup_km": km, "volume_util": f["volume_util"],
+                      "weight_util": f["weight_util"], "util": f["util"],
+                      "score": ps.get("score"), "rule_score": ps.get("rule_score"), "ml_prob": ps.get("ml_prob"),
+                      "offers": self._offer_count(o), "by": by}
+        self._log(o, {"auto": "accepted", "pick": "picked"}.get(by, "assigned"), driver_id, now)
+        actor = "관제" if by == "admin" else self._actor("driver", driver_id)
+        self._fsm(o, "assign", actor, note=f"{MATCH_BY_LABEL[by]} · {d['name']} ({d['truck_type']})", at=now)
+        o.update(driver_id=driver_id, assigned_at=now, offer=None, match_fail=None, match_fail_at=None)
+
+    def _matching_view(self, o: dict) -> dict | None:
+        if o["status"] != "MATCHING":
+            return None
+        off = o["offer"]
+        state = "OFFERED" if off else ("FAILED" if o["match_fail"] else "SEARCHING")
+        v = {"state": state, "round": self._offer_count(o), "declined": len(o["declined"]),
+             "reasons": o["match_fail"] or [], "wait_note": o.get("match_wait"),
+             "radius_km": self.settings["radius_km"],
+             "timeout": off["timeout"] if off else self.settings["timeout_sec"],
+             "formula": self.settings_view()["formula"],
+             "fail_seconds": int((datetime.now() - o["match_fail_at"]).total_seconds()) if o["match_fail_at"] else None}
+        if off:
+            v.update(driver=self.driver_brief(off["driver_id"]), pickup_km=off["pickup_km"],
+                     volume_util=off["volume_util"], weight_util=off["weight_util"], util=off["util"],
+                     score=off["score"], rule_score=off.get("rule_score"), ml_prob=off.get("ml_prob"),
+                     rank=off.get("rank"), candidates=off["candidates"], offer_round=off["round"],
+                     expires_in=max(0, int((off["expires_at"] - datetime.now()).total_seconds())))
+        return v
+
+    # ------------------------------------------------------------------ driver
+    def _driver_offer_stats(self, driver_id: str) -> dict:
+        events = [e for o in self.orders.values() for e in o["match_log"] if e["driver_id"] == driver_id]
+        answered = [e for e in events if e["event"] in ("accepted", "declined", "expired")]
+        accepted = sum(1 for e in answered if e["event"] == "accepted")
+        return {"offers": sum(1 for e in events if e["event"] == "offered"), "accepted": accepted,
+                "picked": sum(1 for e in events if e["event"] == "picked"),
+                "accept_rate": round(100 * accepted / len(answered), 1) if answered else None}
+
+    def driver_offer(self, driver_id: str) -> dict | None:
+        """나에게 온 배차 제안 (없으면 None). 적재 요약은 '내 차량' 기준."""
+        o = self._pending_offer_of(driver_id)
+        if not o:
+            return None
+        v = self.order_view(o)
+        v["packing"] = self._packing_summary(o, self.drivers[driver_id]["truck_type"])
+        return v
+
+    def driver_offer_history(self, driver_id: str, limit: int = 8) -> list[dict]:
+        rows = []
+        for o in self.orders.values():
+            for e in o["match_log"]:
+                if e["driver_id"] == driver_id and e["event"] in ("accepted", "declined", "expired", "assigned", "picked"):
+                    rows.append({**e, "order_id": o["id"], "title": o["title"], "origin": o["origin"],
+                                 "destination": o["destination"], "fare": o["price"] + o["incentive"]})
+        rows.sort(key=lambda r: r["at"], reverse=True)
+        return rows[:limit]
+
+    def _check_offer(self, driver_id: str, order_id: str) -> dict:
+        o = self._get_order(order_id)
+        off = o["offer"]
+        if o["status"] != "MATCHING" or not off or off["driver_id"] != driver_id:
+            raise ApiError(409, "유효한 배차 제안이 아닙니다. 응답 시간이 지나 다음 기사에게 넘어갔을 수 있어요.")
+        return o
+
+    def accept_offer(self, driver_id: str, order_id: str) -> dict:
+        o = self._check_offer(driver_id, order_id)
+        if self._active_run_of(driver_id):
+            raise ApiError(409, "진행 중인 운행을 먼저 완료해 주세요.")
+        self._assign(o, driver_id, by="auto")
+        return self.order_view(o)
+
+    def decline_offer(self, driver_id: str, order_id: str) -> dict:
+        o = self._check_offer(driver_id, order_id)
+        now = datetime.now()
+        o["declined"].append(driver_id)
+        o["offer"] = None
+        self._log(o, "declined", driver_id, now)
+        self._run_matching(o, now)  # 바로 다음 순위에게
+        return {"ok": True}
+
+    def driver_recommendations(self, driver_id: str) -> list[dict]:
+        """AI 추천 리스트: 내 차량에 전량 실리는 매칭 대기 화물을 매칭 점수(거리 + 적재율, 관제 설정 가중치) 순으로.
+        반경 밖 화물도 포함(점수 낮게), 나에게 온 제안은 위 카드에 따로 보여 주므로 제외."""
+        d = self.drivers[driver_id]
+        if not d.get("approved", True):
+            return []  # 가입 승인 전
+        here = self._driver_coord(d)
+        rows = []
+        for o in self.orders.values():
+            if o["status"] != "MATCHING":
+                continue
+            off = o["offer"]
+            if off and off["driver_id"] == driver_id:
+                continue
+            f = self._fit(o, d["truck_type"])
+            if not f["fits"]:
+                continue
+            km = round(geo.route_km(here, geo.geocode(o["origin"])), 1)
+            v = self.order_view(o)
+            v["packing"] = self._packing_summary(o, d["truck_type"])
+            v["rec"] = {
+                "pickup_km": km, "util": f["util"], "volume_util": f["volume_util"], "weight_util": f["weight_util"],
+                **self._pair_score(o, driver_id, km, f["util"]), "in_radius": km <= self.settings["radius_km"],
+                "declined_by_me": driver_id in o["declined"],
+                "offered_to_other": self.drivers[off["driver_id"]]["name"] if off else None,
+                "offer_left": max(0, int((off["expires_at"] - datetime.now()).total_seconds())) if off else None,
+            }
+            rows.append(v)
+        rows.sort(key=lambda v: (v["rec"]["offered_to_other"] is not None, -v["rec"]["score"], v["rec"]["pickup_km"]))
+        for i, v in enumerate(rows, start=1):
+            v["rec"]["rank"] = i
+        return rows
+
+    def accept_pick(self, driver_id: str, order_id: str) -> dict:
+        """AI 추천 리스트에서 기사가 직접 골라 수락 → 배차 확정."""
+        o = self._get_order(order_id)
+        if o["status"] != "MATCHING":
+            raise ApiError(409, "이미 배차된 화물입니다.")
+        if not self.drivers[driver_id].get("approved", True):
+            raise ApiError(403, "관제의 가입 승인 후 배차를 받을 수 있습니다.")
+        if self._active_run_of(driver_id):
+            raise ApiError(409, "진행 중인 운행을 먼저 완료해 주세요.")
+        off = o["offer"]
+        if off and off["driver_id"] != driver_id:
+            raise ApiError(409, "다른 기사가 이 화물의 배차 제안에 응답하는 중입니다. 잠시 후 다시 확인해 주세요.")
+        d = self.drivers[driver_id]
+        if not self._fit(o, d["truck_type"])["fits"]:
+            raise ApiError(400, f"내 차량({d['truck_type']}) 기준 적재 시뮬레이션에서 전량 적재되지 않습니다.")
+        now = datetime.now()
+        mine = self._pending_offer_of(driver_id)
+        if mine and mine["id"] != order_id:
+            # 나에게 온 다른 제안은 거절로 처리하고 바로 다음 순위에게 넘긴다
+            mine["declined"].append(driver_id)
+            mine["offer"] = None
+            self._log(mine, "declined", driver_id, now, note="AI 추천 리스트에서 다른 화물 선택")
+            self._run_matching(mine, now)
+        self._assign(o, driver_id, by="auto" if off else "pick")
+        return self.order_view(o)
+
+    def pending_offers(self) -> list[dict]:
+        rows = [o for o in self.orders.values() if o["status"] == "MATCHING" and o["offer"]]
+        rows.sort(key=lambda o: o["offer"]["expires_at"])
+        return [self.order_view(o) for o in rows]
+
+    def failed_matches(self) -> list[dict]:
+        out = []
+        for o in self.orders.values():
+            if o["status"] != "MATCHING" or o["offer"] or not o["match_fail"]:
+                continue
+            v = self.order_view(o)
+            est = v["fare_est"]
+            gap = pricing.price_gap_ratio(v["fare"], est["recommended"])
+            reasons = list(o["match_fail"])
+            if gap > 0.03:
+                reasons.append(f"AI 적정 운임 대비 약 {gap * 100:.0f}% 저렴")
+            v.update(recommended=est["recommended"], reasons=reasons)
+            out.append(v)
+        out.sort(key=lambda v: v["wait_seconds"], reverse=True)
+        return out
+
+    def candidates(self, order_id: str) -> list[dict]:
+        """관제 직접 지정 후보: 이 화물이 전량 실리고 지금 비어 있는 기사 (반경 · 거절 이력 무관, 가까운 순)."""
+        o = self._get_order(order_id)
+        rows = [r for r in self._evaluate(o) if r["fits"] and not r["busy"]]
+        return sorted(rows, key=lambda r: r["pickup_km"])
+
+    def _repost(self, o: dict, event: str, note: str = ""):
+        now = datetime.now()
+        if o["offer"]:
+            self._log(o, "cancelled", o["offer"]["driver_id"], now)
+            o["offer"] = None
+        o["declined"], o["match_fail"], o["match_fail_at"], o["posted_at"] = [], None, None, now
+        self._log(o, event, None, now, note)
+        self._run_matching(o, now)
+
+    def add_incentive(self, order_id: str, amount: int) -> dict:
+        o = self._get_order(order_id)
+        if o["status"] != "MATCHING":
+            raise ApiError(409, "매칭 대기 중인 화물이 아닙니다.")
+        o["incentive"] += amount
+        self._repost(o, "reposted", f"보조금 +{amount:,}원 · 거절 이력 초기화")
+        return self.order_view(o)
+
+    def rematch(self, order_id: str) -> dict:
+        o = self._get_order(order_id)
+        if o["status"] != "MATCHING":
+            raise ApiError(409, "매칭 대기 중인 화물이 아닙니다.")
+        self._repost(o, "rematch", "거절 이력 초기화 후 다시 매칭")
+        return self.order_view(o)
+
+    def force_assign(self, order_id: str, driver_id: str) -> dict:
+        o = self._get_order(order_id)
+        if o["status"] != "MATCHING":
+            raise ApiError(409, "매칭 대기 중인 화물이 아닙니다.")
+        if driver_id not in {c["id"] for c in self.candidates(order_id)}:
+            raise ApiError(400, "지정할 수 없는 기사입니다. (운행 중 · 다른 제안 대기 중이거나 이 화물이 다 실리지 않음)")
+        if o["offer"]:
+            self._log(o, "cancelled", o["offer"]["driver_id"], datetime.now())
+            o["offer"] = None
+        self._assign(o, driver_id, by="admin")
+        return self.order_view(o)
+
+    def matching_stats(self) -> dict:
+        """매칭 분석: 모든 값은 화물의 매칭 기록에서 계산한다."""
+        matched = [o for o in self.orders.values() if o["match"]]
+        failed = [o for o in self.orders.values() if o["status"] == "MATCHING" and o["match_fail"]]
+        events = [e for o in self.orders.values() for e in o["match_log"]]
+        answered = [e for e in events if e["event"] in ("accepted", "declined", "expired")]
+        secs = [(o["assigned_at"] - o["created_at"]).total_seconds() for o in matched if o["assigned_at"]]
+        kms = [o["match"]["pickup_km"] for o in matched]
+        vols = [o["match"]["volume_util"] for o in matched if o["match"]["volume_util"] is not None]
+        auto = [o for o in matched if o["match"]["by"] in ("auto", "pick")]  # 관제 직접 지정 제외
+
+        bins = [(0, 10), (10, 20), (20, 30), (30, 50), (50, None)]
+        dist = [{"range": f"{lo}~{hi}km" if hi else f"{lo}km 이상",
+                 "count": sum(1 for k in kms if k >= lo and (hi is None or k < hi))} for lo, hi in bins]
+        mix: dict[str, int] = {}
+        for o in matched:
+            t = self.drivers[o["match"]["driver_id"]]["truck_type"]
+            mix[t] = mix.get(t, 0) + 1
+
+        recent = sorted((o for o in matched if o["assigned_at"]), key=lambda o: o["assigned_at"], reverse=True)[:10]
+        drivers = []
+        for d in self.drivers.values():
+            mine = [o for o in matched if o["match"]["driver_id"] == d["id"]]
+            st = self._driver_offer_stats(d["id"])
+            run = self._active_run_of(d["id"])
+            drivers.append({
+                "name": d["name"], "plate": d["plate"], "truck_type": d["truck_type"], "matched": len(mine),
+                "avg_pickup_km": round(mean(o["match"]["pickup_km"] for o in mine), 1) if mine else None,
+                "offers": st["offers"], "accept_rate": st["accept_rate"],
+                "state": "운행중" if run else ("제안 대기" if self._pending_offer_of(d["id"]) else "공차"),
+            })
+        drivers.sort(key=lambda r: (-r["matched"], r["avg_pickup_km"] or 999))
+        return {
+            "kpi": {
+                "match_success_rate": round(100 * len(matched) / (len(matched) + len(failed)), 1) if matched or failed else None,
+                "auto_rate": round(100 * len(auto) / len(matched), 1) if matched else None,
+                "avg_match_seconds": int(mean(secs)) if secs else None,
+                "avg_pickup_km": round(mean(kms), 1) if kms else None,
+                "avg_volume_util": round(mean(vols), 3) if vols else None,
+                "accept_rate": round(100 * sum(1 for e in answered if e["event"] == "accepted") / len(answered), 1)
+                if answered else None,
+            },
+            "settings": self.settings_view(),
+            "engine": {  # 3단계 매칭 엔진 상태 (관제 '매칭 분석' 화면)
+                "pipeline": self.settings_view()["pipeline"],
+                "spatial": "PostGIS ST_DWithin" if getattr(self, "db", None) else "직선거리 (DB 미사용)",
+                "ml": ml_ranker.info(), "ml_weight": ML_WEIGHT,
+                "last_round": getattr(self, "last_round", None),  # 최근 헝가리안 배정 vs 탐욕 방식 비교
+            },
+            "pickup_dist": dist,
+            "truck_mix": [{"truck_type": k, "count": v} for k, v in sorted(mix.items(), key=lambda kv: -kv[1])],
+            "recent": [{
+                "id": o["id"], "title": o["title"], "driver": self.drivers[o["match"]["driver_id"]]["name"],
+                "truck_type": self.drivers[o["match"]["driver_id"]]["truck_type"],
+                "pickup_km": o["match"]["pickup_km"], "volume_util": o["match"]["volume_util"],
+                "score": o["match"]["score"], "offers": o["match"]["offers"],
+                "by": MATCH_BY_LABEL[o["match"]["by"]],
+                "match_seconds": int((o["assigned_at"] - o["created_at"]).total_seconds()),
+                "assigned_at": _iso(o["assigned_at"]),
+            } for o in recent],
+            "drivers": drivers,
+        }
