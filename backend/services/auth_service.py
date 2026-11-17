@@ -65,51 +65,65 @@ class AuthMixin:
             raise ApiError(409, "이미 가입된 이메일입니다.")
         if len(password) < 8:
             raise ApiError(400, "비밀번호는 8자 이상이어야 합니다.")
-        if role == "shipper":
-            if not company or not biz_no:
-                raise ApiError(400, "기업명과 사업자등록번호를 입력해 주세요.")
-            biz = self._check_business(biz_no, owner_name, open_date)
-            org_id = f"S-{len(self.shippers) + 1:03d}"
-            self.shippers[org_id] = {"id": org_id, "name": company, "biz_no": biz["biz_no"], "biz_check": biz,
-                                     "owner_name": owner_name or None}
-            sub = company
-        elif role == "driver":
-            if not plate or not truck_type or not biz_no:
-                raise ApiError(400, "차량 번호, 차종, 사업자등록번호를 입력해 주세요.")
-            if truck_type not in pricing.TRUCK_TYPES:
-                raise ApiError(400, "지원하지 않는 차종입니다.")
-            if base_location and not geo.is_known(base_location):
-                raise ApiError(400, "주 대기 지역을 지역 목록에서 선택해 주세요.")
-            p = comp.classify_plate(plate)
-            if p["plate_type"] == "INVALID":
-                raise ApiError(400, "차량 번호 형식이 올바르지 않습니다. 예: 경기 88바 7712")
-            if not p["dispatchable"]:
-                raise ApiError(400, f"{p['label']} 차량은 등록할 수 없습니다. "
-                                    "화물 운송은 사업용 노란색 번호판(바 · 사 · 아 · 자)만 가능합니다.")
-            missing = comp.missing_driver_docs(documents or [])
-            if missing:
-                raise ApiError(400, "필수 서류를 첨부해 주세요: " + ", ".join(missing))
-            biz = self._check_business(biz_no, owner_name or name, open_date)
-            org_id = f"D-{len(self.drivers) + 1:03d}"
-            self.drivers[org_id] = {"id": org_id, "name": name, "phone": phone, "plate": plate.strip(),
-                                    "plate_type": p["plate_type"], "tonnage": comp.tonnage(truck_type),
-                                    "truck_type": truck_type, "location": base_location or "대전 중구", "month_runs": 0,
-                                    # 관제 '컴플라이언스'에서 서류 확인 후 승인해야 배차를 받을 수 있다
-                                    "approved": False,
-                                    "approval": {"status": "PENDING", "requested_at": _iso(datetime.now()),
-                                                 "biz_no": biz["biz_no"], "biz_check": biz,
-                                                 "documents": documents or [],
-                                                 "decided_at": None, "decided_by": None, "reason": None}}
-            sub = f"{truck_type} · {plate.strip()}"
-        elif role == "admin":
-            if approval_code != ADMIN_APPROVAL_CODE:
-                raise ApiError(403, "관제센터 승인 코드가 올바르지 않습니다.")
-            org_id, sub = None, "중앙 관제 센터"
-        else:
-            raise ApiError(400, "회원 유형이 올바르지 않습니다.")
+        # 가입 자동 검증(컴플라이언스 규칙): 통과 · 차단 모두 감사 로그에 남겨 KPI '검증 자동화율'로 집계한다
+        try:
+            if role == "shipper":
+                if not company or not biz_no:
+                    raise ApiError(400, "기업명과 사업자등록번호를 입력해 주세요.")
+                biz = self._check_business(biz_no, owner_name, open_date)
+                org_id = f"S-{len(self.shippers) + 1:03d}"
+                self.shippers[org_id] = {"id": org_id, "name": company, "biz_no": biz["biz_no"], "biz_check": biz,
+                                         "owner_name": owner_name or None}
+                sub = company
+            elif role == "driver":
+                if not plate or not truck_type or not biz_no:
+                    raise ApiError(400, "차량 번호, 차종, 사업자등록번호를 입력해 주세요.")
+                if truck_type not in pricing.TRUCK_TYPES:
+                    raise ApiError(400, "지원하지 않는 차종입니다.")
+                if base_location and not geo.is_known(base_location):
+                    raise ApiError(400, "주 대기 지역을 지역 목록에서 선택해 주세요.")
+                p = comp.classify_plate(plate)
+                if p["plate_type"] == "INVALID":
+                    raise ApiError(400, "차량 번호 형식이 올바르지 않습니다. 예: 경기 88바 7712")
+                if not p["dispatchable"]:
+                    raise ApiError(400, f"{p['label']} 차량은 등록할 수 없습니다. "
+                                        "화물 운송은 사업용 노란색 번호판(바 · 사 · 아 · 자)만 가능합니다.")
+                missing = comp.missing_driver_docs(documents or [])
+                if missing:
+                    raise ApiError(400, "필수 서류를 첨부해 주세요: " + ", ".join(missing))
+                biz = self._check_business(biz_no, owner_name or name, open_date)
+                org_id = f"D-{len(self.drivers) + 1:03d}"
+                self.drivers[org_id] = {"id": org_id, "name": name, "phone": phone, "plate": plate.strip(),
+                                        "plate_type": p["plate_type"], "tonnage": comp.tonnage(truck_type),
+                                        "truck_type": truck_type, "location": base_location or "대전 중구", "month_runs": 0,
+                                        # 관제 '컴플라이언스'에서 서류 확인 후 승인해야 배차를 받을 수 있다
+                                        "approved": False,
+                                        "approval": {"status": "PENDING", "requested_at": _iso(datetime.now()),
+                                                     "biz_no": biz["biz_no"], "biz_check": biz,
+                                                     "documents": documents or [],
+                                                     "decided_at": None, "decided_by": None, "reason": None}}
+                sub = f"{truck_type} · {plate.strip()}"
+            elif role == "admin":
+                if approval_code != ADMIN_APPROVAL_CODE:
+                    raise ApiError(403, "관제센터 승인 코드가 올바르지 않습니다.")
+                org_id, sub = None, "중앙 관제 센터"
+            else:
+                raise ApiError(400, "회원 유형이 올바르지 않습니다.")
+        except ApiError as e:
+            if role in ("shipper", "driver"):
+                self._signup_audit(role, False, e.detail)
+            raise
+        if role in ("shipper", "driver"):
+            self._signup_audit(role, True, sub)
         self._create_user(email=email, role=role, name=name, password=password, phone=phone,
                           org_id=org_id, sub=sub, documents=documents or [])
         return self.login(email, password)
+
+    def _signup_audit(self, role: str, passed: bool, detail: str):
+        from ..engines.fsm.order_fsm import audit_entry
+        who = "화주" if role == "shipper" else "차주"
+        audit_entry(self, None, "compliance", "signup_pass" if passed else "signup_reject", None,
+                    "AUTO_PASS" if passed else "AUTO_REJECT", "규칙 엔진", note=f"{who} · {detail}", order_id="-")
 
     @staticmethod
     def driver_dispatchable(d: dict) -> bool:

@@ -1,6 +1,6 @@
 /*
  * 차주용 3D 적재 가이드 (Three.js)
- * 백엔드 /api/v1/orders/{id}/packing 의 적재 계획(Py3dbp/EP 엔진 결과 · 좌표 mm)을 받아
+ * 백엔드 /api/v1/orders/{id}/packing 의 적재 계획(규칙 + EP 엔진 결과 · 좌표 mm)을 받아
  * 적재함과 상자를 3D 로 그리고, 상차 순서(load_order)대로 한 상자씩 보여 준다.
  *
  * 좌표: 계획 x = 적재함 길이(0 = 운전석 쪽), y = 폭, z = 높이  →  Three.js (X = 길이, Z = 폭, Y = 높이)

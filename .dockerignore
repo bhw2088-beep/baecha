@@ -28,9 +28,7 @@ docker-compose*.yml
 *.md
 docs/
 *.zip
-기능명세서.txt
-컬럼명_리스트.txt
-실행방법.txt
 
 # 운영 데이터 (볼륨으로만 보관)
 backend/data/pod_photos/
+.devcontainer/

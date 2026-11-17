@@ -16,7 +16,7 @@ from .celery_app import celery_app
 
 @celery_app.task(name="packing.plan", bind=True)
 def plan_packing(self, payload: dict) -> dict:
-    """payload = PackPlanIn 과 같은 형식 (items · truck_type · cold_chain · options · compare_baseline)."""
+    """payload = PackPlanIn 과 같은 형식 (items · truck_type · cold_chain · options)."""
     from ..engines.packer import service
     from ..schemas.order_schema import PackPlanIn
 
@@ -24,8 +24,7 @@ def plan_packing(self, payload: dict) -> dict:
     t0 = time.perf_counter()
     try:
         res = service.plan(body.item_specs(), truck_type=body.truck_type, cold_chain=body.cold_chain,
-                           options=body.options.to_engine(record_steps=False),
-                           compare_baseline=body.compare_baseline)
+                           options=body.options.to_engine(record_steps=False))
     except service.PackingError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "worker": self.request.hostname, "seconds": round(time.perf_counter() - t0, 3),

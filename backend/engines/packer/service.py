@@ -1,11 +1,13 @@
 """
-빈패킹 서비스: 입력 품목 → (차량 자동 추천) → EP 엔진 → 검증 → (선택) py3dbp 비교.
+빈패킹 서비스: 입력 품목 → (차량 자동 추천) → 규칙 + EP 엔진 → 규칙 검증.
 라우터와 화물 등록 로직은 이 함수(plan)만 호출한다.
 """
 
-from .py3dbp_engine import run_py3dbp
+from dataclasses import replace
+
 from .engine import EPPacker, Options, summarize
 from .models import ItemSpec, expand
+from .rules import describe
 from .trucks import TRUCKS, compatible_trucks
 from .validate import validate
 
@@ -25,6 +27,23 @@ def _safety_margin() -> float:
 
 
 def _run(container, boxes, options: Options, cold_chain: bool) -> dict:
+    """R10 좌우 균형 배치는 상자마다 그 순간 최선을 고르는 방식이라 드물게 전체 결과가 더 나빠질 수 있다.
+    → 균형 배치 결과가 '전량 적재 + 위반 없음'이 아니면 균형 없이도 한 번 더 돌려 더 나은 쪽을 쓴다."""
+    r = _run_once(container, boxes, options, cold_chain)
+    if options.balance and not _ok(r):
+        r2 = _run_once(container, boxes, replace(options, balance=False), cold_chain)
+        if _score(r2) > _score(r):
+            r = r2
+    return r
+
+
+def _score(r: dict) -> tuple:
+    fails = sum(1 for c in r["constraints"] if c["status"] == "fail")
+    lateral = r["metrics"]["cog"]["y_offset_ratio"] or 0
+    return (_ok(r), r["metrics"]["placed"], -fails, -lateral)
+
+
+def _run_once(container, boxes, options: Options, cold_chain: bool) -> dict:
     res = EPPacker(container, options).pack(boxes)
     rows = [p.to_dict() for p in res["placements"]]
     total_w = sum(b.weight for b in boxes)
@@ -36,6 +55,7 @@ def _run(container, boxes, options: Options, cold_chain: bool) -> dict:
         "metrics": {**summarize(container, rows, len(boxes), total_w), "elapsed_ms": res["elapsed_ms"]},
         "constraints": validate(container, rows, min_support=options.min_support, lifo=options.lifo,
                                 cold_chain=cold_chain, safety_margin=_safety_margin()),
+        "balance_used": options.balance,
     }
 
 
@@ -44,8 +64,8 @@ def _ok(r: dict) -> bool:
     return r["metrics"]["unplaced"] == 0 and not any(c["status"] == "fail" for c in r["constraints"])
 
 
-def plan(items: list[ItemSpec], *, truck_type: str | None, cold_chain: bool, options: Options,
-         compare_baseline: bool = False) -> dict:
+def plan(items: list[ItemSpec], *, truck_type: str | None, cold_chain: bool, options: Options) -> dict:
+    options = replace(options, safety_margin=_safety_margin())  # R9: 엔진도 안전율 한도까지만 싣는다
     boxes = expand(items)
     if not boxes:
         raise PackingError("적재할 품목을 1개 이상 입력해 주세요.")
@@ -94,17 +114,8 @@ def plan(items: list[ItemSpec], *, truck_type: str | None, cold_chain: bool, opt
     out = {**chosen, "auto": truck_type is None, "candidates": candidates,
            "options": vars(options), "cold_chain": cold_chain, "safety_margin": _safety_margin(),
            "required_tonnage": required_tonnage(total_w, total_v, list(TRUCKS.values()), _safety_margin(),
-                                                cold_chain)}
-    if compare_baseline:
-        container = TRUCKS[chosen["truck"]["name"]]
-        b = run_py3dbp(container, boxes)
-        out["baseline"] = {
-            "name": "py3dbp 1.1.2 (pivot heuristic)",
-            "placements": b["placements"], "unplaced": b["unplaced"],
-            "metrics": {**summarize(container, b["placements"], len(boxes), total_w), "elapsed_ms": b["elapsed_ms"]},
-            "constraints": validate(container, b["placements"], min_support=options.min_support,
-                                    lifo=options.lifo, cold_chain=cold_chain, safety_margin=_safety_margin()),
-        }
+                                                cold_chain),
+           "rules": describe()}
     return out
 
 

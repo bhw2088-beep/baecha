@@ -46,3 +46,17 @@ def greedy(order_ids: list[str], driver_ids: list[str],
             used.add(best[0])
             out.append((o, best[0], best[1]))
     return out
+
+
+def nearest(order_ids: list[str], driver_ids: list[str],
+            km: dict[tuple[str, str], float]) -> list[tuple[str, str, float]]:
+    """KPI 기준선(Baseline): '단순 최단거리 매칭' — 등록 순서대로, 남은 후보 중 상차지까지 가장 가까운 공차에게.
+    점수 · AI 예측 없이 거리만 보는 기존 콜 배차 방식. 반환 (화물, 기사, 상차 거리 km)."""
+    used, out = set(), []
+    for o in order_ids:
+        best = min(((d, km[(o, d)]) for d in driver_ids if (o, d) in km and d not in used),
+                   key=lambda x: x[1], default=None)
+        if best:
+            used.add(best[0])
+            out.append((o, best[0], best[1]))
+    return out

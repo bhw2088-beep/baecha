@@ -8,8 +8,7 @@ __pycache__/
 .pytest_cache/
 
 # 발표 · 내부 정리용 문서 (공유하지 않음)
-발표자료_주요코드.md
-변경점_정리.md
+docs/internal/
 
 # 인수증 사진 (운영 데이터)
 backend/data/pod_photos/

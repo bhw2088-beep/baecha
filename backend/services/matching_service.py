@@ -17,6 +17,8 @@ Store 에 섞어 쓰는 Mixin 이다 (데이터는 core/database.py 의 Store �
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from datetime import datetime, timedelta
 from statistics import mean
@@ -25,6 +27,7 @@ from ..config import DEFAULT_SETTINGS, ML_THRESHOLD, ML_WEIGHT, SETTING_LABEL
 from ..core.errors import ApiError
 from ..core.redis_client import lock as redis_lock
 from ..engines import compliance_engine as comp
+from ..engines import kpi as kpi_engine
 from ..engines import pricing_engine
 from ..engines.matcher import hungarian, ml_ranker
 from ..engines.matcher.cf_score import cf_score
@@ -332,6 +335,11 @@ class MatchingMixin:
         gk = [km[(o, d)] for o, d, _ in greedy]
         h_avg, g_avg = (mean(hk) if hk else None), (mean(gk) if gk else None)
         reduction = round((g_avg - h_avg) / g_avg * 100, 1) if h_avg is not None and g_avg else None
+        # KPI 기준선: 같은 후보 안에서 '단순 최단거리 매칭'(등록 순서 · 가장 가까운 공차) 했을 때의 평균 공차 거리
+        near = hungarian.nearest([o["id"] for o in pending], sorted({d for _, d in km}), km)
+        nk = [k for *_, k in near]
+        n_avg = mean(nk) if nk else None
+        vs_near = round((n_avg - h_avg) / n_avg * 100, 1) if h_avg is not None and n_avg else None
         filtered = sum(1 for rows in evals.values() for r in rows
                        if r["fits"] and not r["busy"] and r["in_radius"] and r["lgb_pass"] is False)
         self._metric_seq = getattr(self, "_metric_seq", len(logs)) + 1
@@ -341,6 +349,9 @@ class MatchingMixin:
                      "hungarian_avg_km": round(h_avg, 2) if h_avg is not None else None,
                      "greedy_avg_km": round(g_avg, 2) if g_avg is not None else None,
                      "deadhead_reduction_pct": reduction, "threshold_filtered": filtered,
+                     "nearest_assigned": len(near),
+                     "nearest_avg_km": round(n_avg, 2) if n_avg is not None else None,
+                     "deadhead_vs_nearest_pct": vs_near,
                      "failed": sum(1 for o in pending if not rankings[o["id"]])})
         del logs[:-500]  # 최근 500 라운드만 유지
 
@@ -350,6 +361,12 @@ class MatchingMixin:
         lat = sorted(e["latency_ms"] for e in logs)
         p95 = lat[min(len(lat) - 1, int(round(0.95 * (len(lat) - 1))))] if lat else None
         red = [e["deadhead_reduction_pct"] for e in logs if e["deadhead_reduction_pct"] is not None and e["assigned"]]
+        # 단순 최단거리 기준선 대비: 라운드별 평균 상차 거리를 배정 건수로 가중해 합친다
+        nr = [e for e in logs if e.get("deadhead_vs_nearest_pct") is not None and e["assigned"]]
+        h_km = sum(e["hungarian_avg_km"] * e["assigned"] for e in nr)
+        n_km = sum(e["nearest_avg_km"] * e["nearest_assigned"] for e in nr)
+        n_cnt, h_cnt = sum(e["nearest_assigned"] for e in nr), sum(e["assigned"] for e in nr)
+        vs_near = round((n_km / n_cnt - h_km / h_cnt) / (n_km / n_cnt) * 100, 1) if n_cnt and h_cnt and n_km else None
         events = [e for o in self.orders.values() for e in o["match_log"]]
         answered = [e for e in events if e["event"] in ("accepted", "declined", "expired")]
         rejected = [e for e in answered if e["event"] != "accepted"]
@@ -359,11 +376,105 @@ class MatchingMixin:
             "dispatch_latency_p95_ms": p95,
             "target_p95_sec": 3.0,
             "empty_deadhead_km_reduction_pct": round(mean(red), 1) if red else None,
+            "deadhead_vs_nearest_pct": vs_near,
+            "target_deadhead_vs_nearest_pct": 10.0,
             "rejection_rate_pct": round(100 * len(rejected) / len(answered), 1) if answered else None,
             "threshold_filtered": sum(e["threshold_filtered"] for e in logs),
             "ml_threshold": ML_THRESHOLD,
             "recent": [{**e, "at": _iso(e["at"])} for e in logs[-15:][::-1]],
         }
+
+    # ---- KPI 목표 대비 현황 (engines/kpi.py 의 목표 · 판정 기준)
+    BENCHMARK_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data",
+                                  "benchmark_metrics.json")
+
+    def _benchmark(self) -> dict | None:
+        """tests/stress_test.py --out 결과 (backend/data 사본). 실시간으로 정답을 알 수 없는 지표에 쓴다."""
+        try:
+            with open(self.BENCHMARK_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
+    def kpi_scorecard(self) -> dict:
+        """구현 단계별 현실적 KPI 8개: 업계 표준 · 목표 · 현재 값 · 판정 · 근거."""
+        m = self.matching_metrics()
+        bench = self._benchmark()
+        rows = []
+
+        # 1) 가입 검증 자동화율: 화주 · 차주 가입 신청은 모두 규칙 엔진이 자동 판정하고 감사 로그에 남긴다
+        sign = [e for e in self.audit if e.get("event") in ("signup_pass", "signup_reject")]
+        passed = sum(1 for e in sign if e["event"] == "signup_pass")
+        rows.append(kpi_engine.evaluate(
+            "compliance_auto_pct", 100.0 if sign else None, source="실시간 (감사 로그)",
+            basis=f"가입 신청 {len(sign)}건 자동 판정 · 통과 {passed} · 차단 {len(sign) - passed}" if sign
+            else "아직 가입 신청 없음 (시드 계정 제외)"))
+
+        # 2) 적재 오탐 · 과적: 배차 확정 화물을 '배정 차량' 기준으로 다시 계획해 필수 규칙 위반 여부 확인
+        checked = violations = 0
+        for o in self.orders.values():
+            if not o.get("match") or not o.get("packing"):
+                continue
+            d = self.drivers.get(o["match"]["driver_id"])
+            if not d:
+                continue
+            p = self._plan_for_truck(o, d["truck_type"])
+            checked += 1
+            violations += bool(p.get("unplaced") or any(c["status"] == "fail" for c in p["constraints"]))
+        b_note = (f" · 스트레스 테스트 {bench['packing_checked']}건 중 위반 {bench['packing_violations']}건"
+                  if bench and "packing_checked" in bench else "")
+        rows.append(kpi_engine.evaluate(
+            "packing_violation_pct", round(100 * violations / checked, 2) if checked else None,
+            source="실시간 (배정 차량 재검증)", basis=f"배차 확정 {checked}건 재검증 · 위반 {violations}건{b_note}"))
+
+        # 3) 배차 지연 p95 · 4) 거절률 · 5) 단순 최단거리 대비 공차 거리 단축률 (매칭 라운드 로그)
+        rows.append(kpi_engine.evaluate(
+            "dispatch_p95_sec", m["dispatch_latency_p95_sec"], source="실시간 (매칭 라운드)",
+            basis=f"배정 라운드 {m['rounds']}회 · 평가 + 헝가리안 배정 소요"))
+        answered = sum(1 for o in self.orders.values() for e in o["match_log"]
+                       if e["event"] in ("accepted", "declined", "expired"))
+        rows.append(kpi_engine.evaluate(
+            "rejection_rate_pct", m["rejection_rate_pct"], source="실시간 (제안 응답)",
+            basis=f"응답 {answered}건 · 거절 + 무응답 비율"))
+        nr = [e for e in m["recent"] if e.get("deadhead_vs_nearest_pct") is not None]
+        last = nr[0] if nr else None
+        rows.append(kpi_engine.evaluate(
+            "deadhead_vs_nearest_pct", m["deadhead_vs_nearest_pct"], source="실시간 (매칭 라운드)",
+            basis=(f"최근 라운드 헝가리안 {last['hungarian_avg_km']}km vs 최단거리 기준선 {last['nearest_avg_km']}km"
+                   if last else "비교 가능한 배정 라운드 없음 (기준선 공차 거리 0km 포함)")
+            + " · 같은 후보 기사 안에서 비교"))
+
+        # 6) 경로 이탈 오알람률: 실시간으로는 '진짜 이탈'인지 정답이 없어 스트레스 테스트(정답 있는 시나리오)로 판정
+        g = (bench or {}).get("gps")
+        normal = (g["runs"] - g["deviation_runs"]) if g else 0
+        live_alerts = sum(1 for a in self.anomalies.values() if a["type"] == "DEVIATION")
+        rows.append(kpi_engine.evaluate(
+            "gps_false_alarm_pct", round(100 * g["false_alarms"] / normal, 1) if g and normal else None,
+            source="스트레스 테스트",
+            basis=(f"정상 운행 {normal}회(단발 튐 {g['spikes']}회 포함) 오알람 {g['false_alarms']}건 · "
+                   f"고의 이탈 {g['detected']}/{g['deviation_runs']} 감지" if g else "스트레스 테스트 결과 없음")
+            + f" · 실시간 이탈 경보 {live_alerts}건"))
+
+        # 7) 관제 반영 지연: Redis Streams 메시지 ID(XADD 시각) → 저장소 반영 시각
+        from ..workers import gps_stream_worker
+        rl = gps_stream_worker.relay_latency()
+        rows.append(kpi_engine.evaluate(
+            "relay_p95_sec", round(rl["p95_ms"] / 1000, 3) if rl["p95_ms"] is not None else None,
+            source="실시간 (Redis Streams)",
+            basis=(f"핑 {rl['count']:,}건 · 평균 {rl['avg_ms']:.0f}ms · 서버 반영 기준 (관제 화면은 3초마다 자동 갱신)"
+                   if rl["count"] else "GPS 스트림 미수신 (Redis 없음 · 운행 중 화물 없음)")))
+
+        # 8) PG 정산 성공률: 결제 시도 중 승인된 비율 (취소 · 환불은 승인 이후라 성공으로 셈)
+        pays = self.payments()
+        failed_pg = getattr(self, "pg_failures", 0)
+        ok_pg = sum(1 for p in pays if p.get("status") in ("APPROVED", "CANCELLED"))
+        tried = len(pays) + failed_pg
+        rows.append(kpi_engine.evaluate(
+            "pg_success_pct", round(100 * ok_pg / tried, 1) if tried else None, source="실시간 (모의 PG)",
+            basis=f"결제 시도 {tried}건 · 승인 {ok_pg}건 · 모의 PG(실제 출금 없음)" if tried else "아직 결제 없음"))
+
+        return {"rows": rows, "summary": kpi_engine.summary(rows),
+                "benchmark_at": (bench or {}).get("generated_at")}
 
     def _matching_tick(self):
         """제안 시간 초과 처리 → 제안이 없는 매칭 대기 화물(실패 포함) 전체를 헝가리안으로 다시 배정."""
@@ -592,6 +703,23 @@ class MatchingMixin:
         secs = [(o["assigned_at"] - o["created_at"]).total_seconds() for o in matched if o["assigned_at"]]
         kms = [o["match"]["pickup_km"] for o in matched]
         vols = [o["match"]["volume_util"] for o in matched if o["match"]["volume_util"] is not None]
+        wgts = [o["match"]["weight_util"] for o in matched if o["match"].get("weight_util") is not None]
+        # 유효 적재율 = 부피 · 중량 중 큰 쪽 (무거운 화물은 부피보다 중량이 먼저 찬다 · 매칭 점수와 같은 기준)
+        utils = [o["match"]["util"] for o in matched if o["match"].get("util") is not None]
+        # 배차 소요 분해: 시스템 처리(등록 → 첫 제안) + 기사 응답(수락한 기사에게 간 제안 → 수락)
+        sys_secs, resp_secs = [], []
+        for o in matched:
+            log = o["match_log"]
+            first = next((e for e in log if e["event"] == "offered"), None)
+            acc = next((e for e in reversed(log) if e["event"] == "accepted"), None)
+            if first:
+                sys_secs.append(max(0.0, (datetime.fromisoformat(first["at"]) - o["created_at"]).total_seconds()))
+            if acc:
+                off = next((e for e in reversed(log) if e["event"] == "offered"
+                            and e["driver_id"] == acc["driver_id"] and e["at"] <= acc["at"]), None)
+                if off:
+                    resp_secs.append((datetime.fromisoformat(acc["at"])
+                                      - datetime.fromisoformat(off["at"])).total_seconds())
         auto = [o for o in matched if o["match"]["by"] in ("auto", "pick")]  # 관제 직접 지정 제외
 
         bins = [(0, 10), (10, 20), (20, 30), (30, 50), (50, None)]
@@ -622,8 +750,16 @@ class MatchingMixin:
                 "match_success_rate": round(100 * len(matched) / (len(matched) + len(failed)), 1) if matched or failed else None,
                 "auto_rate": round(100 * len(auto) / len(matched), 1) if matched else None,
                 "avg_match_seconds": int(mean(secs)) if secs else None,
+                "avg_offer_seconds": round(mean(sys_secs), 1) if sys_secs else None,      # 시스템 처리 (기록)
+                # 시스템 매칭 속도 (실측): 제안을 보낸 배정 라운드의 소요 시간 평균 — 차량별 적재 재계산 · 거리 · AI 예측 · 헝가리안
+                #   (제안을 보낸 라운드가 아직 없으면 후보를 평가한 라운드 전체 평균)
+                "system_match_seconds": (lambda rs: round(mean(e["latency_ms"] for e in rs) / 1000, 2) if rs else None)(
+                    [e for e in self.metrics_log if e["assigned"]] or [e for e in self.metrics_log if e["orders"]]),
+                "avg_response_seconds": int(mean(resp_secs)) if resp_secs else None,     # 기사 응답
                 "avg_pickup_km": round(mean(kms), 1) if kms else None,
                 "avg_volume_util": round(mean(vols), 3) if vols else None,
+                "avg_weight_util": round(mean(wgts), 3) if wgts else None,
+                "avg_util": round(mean(utils), 3) if utils else None,
                 "accept_rate": round(100 * sum(1 for e in answered if e["event"] == "accepted") / len(answered), 1)
                 if answered else None,
             },
@@ -641,7 +777,7 @@ class MatchingMixin:
                 "id": o["id"], "title": o["title"], "driver": self.drivers[o["match"]["driver_id"]]["name"],
                 "truck_type": self.drivers[o["match"]["driver_id"]]["truck_type"],
                 "pickup_km": o["match"]["pickup_km"], "volume_util": o["match"]["volume_util"],
-                "score": o["match"]["score"], "offers": o["match"]["offers"],
+                "util": o["match"].get("util"), "score": o["match"]["score"], "offers": o["match"]["offers"],
                 "by": MATCH_BY_LABEL[o["match"]["by"]],
                 "match_seconds": int((o["assigned_at"] - o["created_at"]).total_seconds()),
                 "assigned_at": _iso(o["assigned_at"]),

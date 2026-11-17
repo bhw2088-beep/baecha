@@ -1,24 +1,39 @@
-# 배차의 민족 — 도커 실행 (Phase 0: 컨테이너 오케스트레이션)
+# 배차의 민족 — 개발용 도커 실행 (Phase 0: 컨테이너 오케스트레이션)
+#
 #   실행:  docker compose up --build -d   → 브라우저에서 http://localhost:8501
 #   로그:  docker compose logs -f
 #   끄기:  docker compose down            (DB 데이터는 pgdata 볼륨에 남음)
-#   DB까지 완전히 지우기: docker compose down -v
+#   DB까지 완전히 지우기:  docker compose down -v
+#
 # 접속 정보(DB 계정 등)는 .env 에서 읽습니다. 처음이면 .env.example 을 .env 로 복사하세요.
+# 운영 배포는 docker-compose.prod.yml (내부 네트워크 격리 · 리소스 제한 · DB/Redis 포트 비공개)
 #
 # 보안 (개발용 기본값)
 #   - DB · Redis 포트는 이 PC(127.0.0.1)에서만 접속 가능 → 같은 와이파이의 다른 기기는 접속 불가
 #     (웹 화면 8501 · API 8000 은 휴대폰 시연을 위해 같은 네트워크에 열어 둠)
 #   - 앱 컨테이너는 root 가 아닌 appuser 로 실행 (Dockerfile) · 권한 상승 금지(no-new-privileges)
 #   - restart: unless-stopped → PC 재부팅 후 Docker Desktop 이 켜지면 자동으로 다시 실행
-#   운영 배포는 docker-compose.prod.yml (내부 네트워크 격리 · 리소스 제한 · 포트 비공개)
 name: baecha
 
+# ---- 공통 설정 (앵커) ----------------------------------------------------------
+# 앱 서비스(backend · worker · frontend · simulator)는 이미지 하나(baecha-app)를 같이 쓴다.
+#   → 빌드는 backend 에서 한 번만 하고, 나머지는 그 이미지를 재사용 (예전엔 같은 이미지를 4번 빌드)
 x-app: &app
+  image: baecha-app:dev
+  pull_policy: never        # 레지스트리에서 받지 않고 backend 가 빌드한 이미지를 쓴다
   restart: unless-stopped
   security_opt:
     - no-new-privileges:true
 
+# 컨테이너끼리는 서비스 이름(db, redis)으로 접속 (.env 의 localhost 주소를 덮어씀)
+# TZ: 컨테이너 기본은 UTC → '오늘' 기준 시각을 한국 시간으로
+x-app-env: &app-env
+  TZ: Asia/Seoul
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+  REDIS_URL: redis://redis:6379/0
+
 services:
+  # ---- 데이터 저장소 ----------------------------------------------------------
   db:
     image: postgis/postgis:17-3.5          # PostgreSQL 17 + PostGIS 3.5
     restart: unless-stopped
@@ -50,16 +65,13 @@ services:
       timeout: 3s
       retries: 20
 
+  # ---- 앱 ---------------------------------------------------------------------
   backend:
     <<: *app
-    build: .
+    build: .                # 앱 이미지 빌드는 여기서만
     command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
     env_file: .env
-    environment:
-      TZ: Asia/Seoul            # 컨테이너 기본은 UTC → '오늘' 기준 시각을 한국 시간으로
-      # 컨테이너끼리는 서비스 이름(db, redis)으로 접속 (.env 의 localhost 주소를 덮어씀)
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
+    environment: *app-env
     volumes:
       - pod_photos:/app/backend/data/pod_photos   # 인수증 사진 (컨테이너를 다시 만들어도 유지)
     ports:
@@ -73,23 +85,29 @@ services:
   worker:
     # Celery 워커: 3D 빈패킹 등 무거운 계산 (브로커 · 결과 = Redis)
     <<: *app
-    build: .
     command: celery -A backend.workers.celery_app worker -l info --concurrency 2 -n packer@%h
     env_file: .env
-    environment:
-      TZ: Asia/Seoul
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
+    environment: *app-env
     depends_on:
       redis:
         condition: service_healthy
 
+  frontend:
+    <<: *app
+    command: python -m streamlit run frontend/app.py --server.address 0.0.0.0 --server.port 8501
+    environment:
+      TZ: Asia/Seoul
+      BAECHA_API_BASE: http://backend:8000/api/v1
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+
   simulator:
     # 가상 기사 GPS 시뮬레이터 (모의 데이터 · 가우스 지터 · 고의 이탈 시나리오)
     #   → POST /tracking/ping/batch → 백엔드가 배정 기사 대조 → Redis Streams "gps:stream" → GPS 워커 판정
-    # 가상 화주 주문: docker compose run --rm simulator python -m simulator.virtual_shipper --count 5
+    # 가상 화주 주문:  docker compose run --rm simulator python -m simulator.virtual_shipper --count 5
     <<: *app
-    build: .
     command: python -m simulator.virtual_driver
     environment:
       TZ: Asia/Seoul
@@ -102,18 +120,6 @@ services:
       - backend
       - redis
 
-  frontend:
-    <<: *app
-    build: .
-    command: python -m streamlit run frontend/app.py --server.address 0.0.0.0 --server.port 8501
-    environment:
-      TZ: Asia/Seoul
-      BAECHA_API_BASE: http://backend:8000/api/v1
-    ports:
-      - "8501:8501"
-    depends_on:
-      - backend
-
 volumes:
-  pgdata:
+  pgdata:          # 이름 유지: 바꾸면 기존 개발 DB 가 빈 DB 처럼 보인다
   pod_photos:

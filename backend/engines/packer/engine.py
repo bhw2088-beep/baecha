@@ -1,24 +1,29 @@
 """
-Extreme Point(EP) 기반 3D 빈패킹 휴리스틱.
+규칙(Rule) + Extreme Point(EP) 기반 3D 적재 엔진.
 
 참고: Crainic, Perboli, Tadei (2008) "Extreme Point-Based Heuristics for Three-Dimensional Bin Packing"
+적재 규칙 R0~R10 의 정의 · 이름 · 미적재 사유는 rules.py 한 곳에 있다 (검증기 · 화면과 공용).
 
 알고리즘 개요
-  1. 정렬 휴리스틱: 하차 순서(늦게 내릴 것 먼저) → 적층 가능 품목 먼저(파손주의는 나중=위쪽)
-                    → 선택한 기준(면적-높이 군집 / 부피 / 무게) 내림차순
+  1. 정렬 규칙: 하차 순서(늦게 내릴 것 먼저) → 적층 가능 품목 먼저(파손주의 · 냉동은 나중=위쪽)
+               → 선택한 기준(면적-높이 군집 / 부피 / 무게) 내림차순
   2. 상자마다 현재 EP 목록을 배치 우선순위(merit)로 정렬하고,
-     첫 번째로 '모든 제약을 만족하는' EP × 방향 조합에 배치한다 (first-fit over sorted EPs).
+     첫 번째로 '모든 배치 규칙을 만족하는' EP × 방향 조합을 찾는다 (first-fit over sorted EPs).
        - wall  : (x, z, y)  운전석 쪽부터 벽을 쌓듯이 → 다중 하차/LIFO 에 유리
        - floor : (z, x, y)  바닥부터 채움 → 무게중심이 낮음
-  3. 배치한 상자의 세 모서리 (x+dx,y,z) (x,y+dy,z) (x,y,z+dz) 를 다른 축 방향으로
+  3. R10 좌우 균형: 찾은 자리와 같은 줄(같은 x · z)의 반대편(오른쪽 벽 또는 오른쪽 상자 옆)에도 놓아 보고,
+     좌우 무게중심이 차체 가운데에 더 가까워지는 쪽을 고른다. (EP 는 왼쪽 벽부터 채워서 그대로 두면 한쪽으로 쏠림)
+  4. 배치한 상자의 세 모서리 (x+dx,y,z) (x,y+dy,z) (x,y,z+dz) 를 다른 축 방향으로
      '투영'해서 새 EP 를 만든다 (가장 가까운 상자 면 또는 벽/바닥에 닿을 때까지).
      → 단순 모서리(pivot)만 쓰는 방식보다 빈틈을 훨씬 잘 찾는다.
 
-필수 제약 (hard constraint) — 하나라도 어기면 그 위치에는 놓지 않는다
-  C1 적재함 경계   C2 상자 간 비중첩   C3 방향(세움 고정)   C4 최대 적재중량
-  C5 지지면 비율(공중 부양 금지)   C6 적층 불가/상부 허용하중(하중을 아래로 전파해서 검사)
-  C7 하차 순서(LIFO): 먼저 내릴 화물 위/앞(도어 쪽)을 나중에 내릴 화물이 막으면 안 됨
+배치 중 차단 규칙 — 하나라도 어기면 그 위치에는 놓지 않는다
+  R1 적재함 경계   R2 상자 간 비중첩   R3 방향(세움 고정)   R4 최대 적재중량
+  R5 지지면 비율(공중 부양 금지)   R6 적층 불가/상부 허용하중(하중을 아래로 전파해서 검사)
+  R7 파손주의 · 냉동 최상단(위에 적재 금지)
+  R8 하차 순서(LIFO): 먼저 내릴 화물 위/앞(도어 쪽)을 나중에 내릴 화물이 막으면 안 됨
      (측면 개방 차량은 '위에 얹힘'만 검사)
+  R9 보수적 안전율: 부피 · 중량을 (1 − 안전율)까지만 싣는다
 """
 
 from __future__ import annotations
@@ -30,25 +35,20 @@ from dataclasses import dataclass
 import numpy as np
 
 from .models import Box, Placement
+from .rules import unplaced_reason
 from .trucks import Container
 
 EPS = 1e-6
-REASON_LABEL = {
-    "weight": "최대 적재중량 초과",
-    "space": "남은 공간 부족",
-    "support": "지지면 부족 (공중 부양 위험)",
-    "fragile": "아래가 적층 불가 품목",
-    "load": "아래 품목의 상부 허용하중 초과",
-    "lifo": "하차 순서(LIFO) 위반",
-}
 
 
 @dataclass
 class Options:
     merit: str = "wall"            # wall | floor
     sort: str = "area_height"      # area_height | volume | weight
-    min_support: float = 0.8       # 바닥 면적 대비 지지 비율
-    lifo: bool = True
+    min_support: float = 0.8       # R5 바닥 면적 대비 지지 비율
+    lifo: bool = True              # R8
+    safety_margin: float = 0.0     # R9 (서비스가 config.safety_margin 을 넣어 줌 · 0 = 한도 없음)
+    balance: bool = True           # R10 좌우 균형 자리 선택
     record_steps: bool = True
     max_step_snapshots: int = 400
 
@@ -87,20 +87,32 @@ class EPPacker:
         self.placed: list[Placement] = []
         self.sup: list[list[tuple[int, float]]] = []  # 상자별 (아래 지지 상자 index, 접촉 면적)
         self.total_weight = 0.0
+        self.total_volume = 0
+        self.weight_y = 0.0  # Σ 무게 × 좌우 중심 (R10 좌우 무게중심 계산용)
+        # R9 보수적 안전율: 부피 · 중량을 (1 − 안전율)까지만
+        cap = 1 - max(0.0, self.o.safety_margin)
+        self.weight_limit = self.c.max_weight * cap
+        self.volume_limit = self.c.volume * cap
         eps: list[tuple[int, int, int]] = [(0, 0, 0)]
         snapshots: list[list[list[int]]] = []
         unplaced = []
 
+        def skip(box: Box, fail_key: str):
+            unplaced.append({"item_id": box.uid, "name": box.name, "sku": box.sku, "reason": unplaced_reason(fail_key)})
+
         for box in order:
-            if self.total_weight + box.weight > self.c.max_weight + EPS:
-                unplaced.append({"item_id": box.uid, "name": box.name, "sku": box.sku, "reason": REASON_LABEL["weight"]})
+            if self.total_weight + box.weight > self.c.max_weight + EPS:          # R4
+                skip(box, "weight")
+                continue
+            if (self.total_weight + box.weight > self.weight_limit + EPS           # R9
+                    or self.total_volume + box.volume > self.volume_limit + EPS):
+                skip(box, "safety")
                 continue
             eps.sort(key=self._merit)
             fails: Counter = Counter()
             choice = self._first_fit(box, eps, fails)
             if choice is None:
-                reason = next((r for r, _ in fails.most_common() if r != "space"), "space") if fails else "space"
-                unplaced.append({"item_id": box.uid, "name": box.name, "sku": box.sku, "reason": REASON_LABEL[reason]})
+                skip(box, next((r for r, _ in fails.most_common() if r != "space"), "space") if fails else "space")
                 continue
             if self.o.record_steps and len(snapshots) < self.o.max_step_snapshots:
                 snapshots.append([list(p) for p in eps])
@@ -134,23 +146,49 @@ class EPPacker:
                 if best is None or key < best[0]:
                     best = (key, cand)
             if best:
-                return best[1]
+                cand = best[1]
+                if self.o.balance:  # R10 좌우 균형: 같은 줄 반대편 자리가 더 균형이 맞으면 그쪽
+                    alt = self._mirror(box, cand)
+                    if alt is not None and self._lateral_after(alt) + EPS < self._lateral_after(cand):
+                        alt.balanced = True
+                        return alt
+                return cand
         return None
+
+    def _mirror(self, box: Box, p: Placement) -> Placement | None:
+        """p 와 같은 x · z · 방향으로, +y 쪽에서 처음 닿는 면(오른쪽 벽 또는 상자)에 붙인 자리."""
+        x, y, z, dx, dy, dz = p.x, p.y, p.z, p.dx, p.dy, p.dz
+        k = self.k
+        X0, X1, Y0, Z0, Z1 = (a[:k] for a in (self.X0, self.X1, self.Y0, self.Z0, self.Z1))
+        m = (X0 < x + dx) & (X1 > x) & (Z0 < z + dz) & (Z1 > z) & (Y0 >= y + dy - EPS)
+        wall = float(Y0[m].min()) if k and m.any() else float(self.c.width)
+        y_r = int(wall) - dy
+        if y_r <= y:
+            return None
+        return self._try(box, (x, y_r, z), dx, dy, dz, Counter())
+
+    def _lateral_after(self, p: Placement) -> float:
+        """p 를 놓았을 때 좌우 무게중심이 차체 가운데에서 벗어난 거리 (mm)."""
+        w = self.total_weight + p.box.weight
+        if w <= 0:
+            return 0.0
+        cy = (self.weight_y + p.box.weight * (p.y + p.dy / 2)) / w
+        return abs(cy - self.c.width / 2)
 
     def _try(self, box: Box, ep, dx, dy, dz, fails: Counter) -> Placement | None:
         x, y, z = ep
         c = self.c
-        # C1 경계
+        # R1 경계  (R3 방향은 box.orientations() 가 세움 고정이면 높이축 유지 방향만 내준다)
         if x + dx > c.length or y + dy > c.width or z + dz > c.height:
             fails["space"] += 1
             return None
         k = self.k
         X0, X1, Y0, Y1, Z0, Z1 = (a[:k] for a in (self.X0, self.X1, self.Y0, self.Y1, self.Z0, self.Z1))
-        # C2 비중첩
+        # R2 비중첩
         if k and np.any((X0 < x + dx) & (X1 > x) & (Y0 < y + dy) & (Y1 > y) & (Z0 < z + dz) & (Z1 > z)):
             fails["space"] += 1
             return None
-        # C5 지지면
+        # R5 지지면
         sup: list[tuple[int, float]] = []
         ratio = 1.0
         if z > 0:
@@ -164,9 +202,13 @@ class EPPacker:
             if ratio + EPS < self.o.min_support:
                 fails["support"] += 1
                 return None
-            # C6-a 아래가 적층 불가(파손주의) 품목이면 불가
-            if any(not self.placed[i].box.stackable for i in idx):
-                fails["fragile"] += 1
+            # R7 아래가 파손주의 · 냉동(최상단 전용) / R6 아래가 적층 불가 품목이면 불가
+            below = [self.placed[i].box for i in idx]
+            if any(b.fragile or b.frozen for b in below):
+                fails["top"] += 1
+                return None
+            if any(not b.stackable for b in below):
+                fails["nostack"] += 1
                 return None
             sup = [(int(i), float(a)) for i, a in zip(idx, areas)]
         # 이 자리에 놓으면 '위에 이미 있는 상자'의 바닥을 새로 받쳐주게 되는 경우 (돌출부 아래 빈칸 채우기)
@@ -176,16 +218,16 @@ class EPPacker:
             ia = np.nonzero(m)[0]
             if len(ia):
                 if not box.stackable:
-                    fails["fragile"] += 1
+                    fails["top" if box.fragile or box.frozen else "nostack"] += 1
                     return None
                 areas = (np.minimum(X1[ia], x + dx) - np.maximum(X0[ia], x)) *                         (np.minimum(Y1[ia], y + dy) - np.maximum(Y0[ia], y))
                 above = [(int(i), float(a)) for i, a in zip(ia, areas)]
-        # C6-b 상부 허용하중: 후보를 포함한 전체 하중 분포를 다시 계산해서 모든 상자의 허용하중 확인
+        # R6 상부 허용하중: 후보를 포함한 전체 하중 분포를 다시 계산해서 모든 상자의 허용하중 확인
         loads = self._loads(box, z, sup, above)
         if loads is None:
             fails["load"] += 1
             return None
-        # C7 하차 순서
+        # R8 하차 순서
         if self.o.lifo and k and self._blocks(box.drop, x, y, z, dx, dy, dz):
             fails["lifo"] += 1
             return None
@@ -239,6 +281,8 @@ class EPPacker:
         self.k += 1
         self.placed.append(p)
         self.total_weight += p.box.weight
+        self.total_volume += p.dx * p.dy * p.dz
+        self.weight_y += p.box.weight * (p.y + p.dy / 2)
         sup, above, loads = p._pending
         del p._pending
         self.sup.append(sup)

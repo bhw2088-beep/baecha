@@ -18,7 +18,7 @@ SEV = {"HIGH": ("긴급", "red"), "MEDIUM": ("주의", "amber"), "LOW": ("참고
 
 
 def agent_panel():
-    """규칙 기반 AI 관제 보조: 지금 조치할 항목 · 근거 · 권장 조치(버튼) · 안내 문구 초안."""
+    """AI 관제 브리핑: 지금 조치할 항목 · 근거 · 권장 조치(버튼) · 안내 문구 초안."""
     try:
         b = api.get("/admin/agent/briefing")
     except api.ApiError as e:
@@ -27,23 +27,7 @@ def agent_panel():
     c = b["counts"]
     head = f"AI 관제 브리핑 · 긴급 {c['HIGH']} · 주의 {c['MEDIUM']} · 참고 {c['LOW']}"
     with st.expander(head, icon=":material/smart_toy:", expanded=c["HIGH"] > 0):
-        llm = f"Gemini {b.get('llm_model')} 연결됨" if b.get("llm") else "Gemini 키 없음 → 규칙 기반으로 답변"
-        st.caption(f"{b['agent']} · {b['engine']} · {ui.dt_text(b['generated_at'], '%H:%M:%S')} 기준 · 자연어 명령: {llm}")
-        with st.form("agent_ask", border=False):
-            q1, q2 = st.columns([4, 1], vertical_alignment="bottom")
-            q = q1.text_input("관제 명령", placeholder="예) 매칭 실패 보여줘 · 지연 차량 · 수급 현황 · 임계값 가이드 · 반경 70km로 바꿔",
-                              label_visibility="collapsed")
-            if q2.form_submit_button("AI 에게 묻기", icon=":material/send:", width="stretch") and q.strip():
-                st.session_state.agent_answer = ui.load(api.post, "/admin/agent/ask", {"text": q.strip()})
-        ans = st.session_state.get("agent_answer")
-        if ans:
-            note = f" · {ans['fallback']}" if ans.get("fallback") else ""
-            applied = " · 설정 변경 적용됨" if ans.get("applied") else ""
-            ui.html(f'<div class="ct-card" style="border-left:3px solid {ui.BRAND}"><div class="ct-muted" '
-                    f'style="font-size:12px">{ui.escape(ans["engine"])}{note}{applied}</div>'
-                    f'<div style="white-space:pre-wrap;margin-top:4px">{ui.escape(ans["answer"])}</div></div>')
-            if ans.get("hint"):
-                st.caption(ans["hint"])
+        st.caption(f"{ui.dt_text(b['generated_at'], '%H:%M:%S')} 기준")
         ui.html(f'<div class="ct-card"><b>{b["summary"]}</b></div>')
         for n, i in enumerate(b["insights"][:8]):
             label, tone = SEV[i["severity"]]
@@ -545,10 +529,16 @@ def metrics_panel(m: dict | None):
         ui.kpis([
             {"label": "배차 지연 p95", "value": "-" if p95 is None else f"{p95:.2f}", "unit": "초",
              "alert": p95 is not None and p95 >= m["target_p95_sec"], "note": f"목표 < {m['target_p95_sec']:.0f}초"},
-            {"label": "공차 거리 단축률", "value": "-" if m["empty_deadhead_km_reduction_pct"] is None
-             else f"{m['empty_deadhead_km_reduction_pct']:.1f}", "unit": "%", "note": "헝가리안 vs 그리디 평균 상차 거리"},
+            {"label": "공차 거리 단축률", "value": "-" if m.get("deadhead_vs_nearest_pct") is None
+             else f"{m['deadhead_vs_nearest_pct']:.1f}", "unit": "%",
+             "alert": m.get("deadhead_vs_nearest_pct") is not None
+             and m["deadhead_vs_nearest_pct"] < m.get("target_deadhead_vs_nearest_pct", 10),
+             "note": f"단순 최단거리 매칭 대비 · 목표 ≥ {m.get('target_deadhead_vs_nearest_pct', 10):.0f}%"
+                     + ("" if m["empty_deadhead_km_reduction_pct"] is None
+                        else f" · 점수순 그리디 대비 {m['empty_deadhead_km_reduction_pct']:.1f}%")},
             {"label": "거절률", "value": "-" if m["rejection_rate_pct"] is None else f"{m['rejection_rate_pct']:.1f}",
-             "unit": "%", "note": "거절 + 무응답 / 응답"},
+             "unit": "%", "alert": m["rejection_rate_pct"] is not None and m["rejection_rate_pct"] >= 20,
+             "note": "거절 + 무응답 / 응답 · 목표 < 15~20%"},
             {"label": "임계값 차단", "value": m["threshold_filtered"], "unit": "쌍",
              "note": f"lgb_score < {m['ml_threshold']:.2f} → 자동 제안 안 함"},
         ])
@@ -556,7 +546,8 @@ def metrics_panel(m: dict | None):
             st.dataframe(pd.DataFrame([{
                 "라운드": r["id"], "시각": ui.dt_text(r["at"], "%H:%M:%S"), "화물": r["orders"], "후보 기사": r["drivers"],
                 "배정": r["assigned"], "지연(ms)": r["latency_ms"], "헝가리안 상차(km)": r["hungarian_avg_km"],
-                "그리디 상차(km)": r["greedy_avg_km"], "단축률(%)": r["deadhead_reduction_pct"],
+                "최단거리 기준선(km)": r.get("nearest_avg_km"), "단축률 vs 최단(%)": r.get("deadhead_vs_nearest_pct"),
+                "그리디 상차(km)": r["greedy_avg_km"], "단축률 vs 그리디(%)": r["deadhead_reduction_pct"],
                 "임계값 차단": r["threshold_filtered"], "실패": r["failed"],
             } for r in m["recent"]]), hide_index=True, width="stretch")
         g = ui.load(api.get, "/admin/agent/tuning")
@@ -582,10 +573,15 @@ def matching():
     ui.kpis([
         {"label": "매칭 성공률", "value": pct(k["match_success_rate"]), "unit": "%", "note": "배차 확정 / (확정 + 현재 실패)"},
         {"label": "자동 매칭 비율", "value": pct(k["auto_rate"]), "unit": "%", "note": "관제 직접 지정 제외"},
-        {"label": "평균 배차 소요", "value": ui.duration(k["avg_match_seconds"]), "note": "등록 → 배차 확정"},
+        {"label": "평균 배차 소요", "value": ui.duration(k["avg_match_seconds"]),
+         "note": "등록 → 배차 확정 · 기사 응답 " + ui.duration(k.get("avg_response_seconds"))
+                 + " + 시스템 매칭 " + ("-" if k.get("system_match_seconds") is None
+                                         else f"{k['system_match_seconds']:.2f}초 (실측)")},
         {"label": "평균 상차 거리", "value": pct(k["avg_pickup_km"]), "unit": "km", "note": "배차 당시 기사 위치 기준"},
-        {"label": "평균 부피 적재율", "value": pct(k["avg_volume_util"] * 100 if k["avg_volume_util"] else None, 0),
-         "unit": "%", "note": "배정 차량 기준"},
+        {"label": "평균 유효 적재율", "value": pct(k["avg_util"] * 100 if k.get("avg_util") else None, 0),
+         "unit": "%", "note": "부피 · 중량 중 큰 쪽 · 부피 "
+                              + pct(k["avg_volume_util"] * 100 if k["avg_volume_util"] else None, 0) + "% · 중량 "
+                              + pct(k["avg_weight_util"] * 100 if k.get("avg_weight_util") else None, 0) + "%"},
         {"label": "제안 수락률", "value": pct(k["accept_rate"]), "unit": "%", "note": "수락 / (수락 + 거절 + 무응답)"},
     ])
 
@@ -616,11 +612,13 @@ def matching():
     if d["recent"]:
         st.dataframe(pd.DataFrame([{
             "화물 ID": r["id"], "화물": r["title"], "기사": r["driver"], "차종": r["truck_type"],
-            "방식": r["by"], "상차 거리": r["pickup_km"], "부피 적재율": r["volume_util"],
+            "방식": r["by"], "상차 거리": r["pickup_km"], "유효 적재율": r.get("util"), "부피 적재율": r["volume_util"],
             "점수": round(r["score"] * 100) if r["score"] is not None else None, "제안 횟수": r["offers"],
             "배차 소요": ui.duration(r["match_seconds"]),
         } for r in d["recent"]]), hide_index=True, width="stretch", column_config={
             "상차 거리": st.column_config.NumberColumn(format="%.1fkm"),
+            "유효 적재율": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1,
+                                                       help="부피 · 중량 중 큰 쪽"),
             "부피 적재율": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
             "점수": st.column_config.NumberColumn(format="%d점"),
             "제안 횟수": st.column_config.NumberColumn(format="%d회"),

@@ -88,6 +88,12 @@ async def matching_metrics():
     return store.matching_metrics()
 
 
+@router.get("/admin/kpi", dependencies=[Admin])
+async def kpi_scorecard():
+    """구현 단계별 현실적 KPI 목표 대비 현황 (업계 표준 · 목표 · 현재 값 · 판정 · 근거)."""
+    return store.kpi_scorecard()
+
+
 @router.get("/admin/matching/settings", dependencies=[Admin])
 async def matching_settings():
     return store.settings_view()

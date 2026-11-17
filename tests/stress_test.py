@@ -9,10 +9,14 @@ Phase 6: 마이크로 배치 매칭 스트레스 테스트 + GPS 디바운싱 �
   5) 적재 오탐: 배차된 화물마다 배정 차량 기준 적재 계획을 다시 검증 → 안전율 · 축중량 · 중량 위반 0건인지
   6) GPS: 정상 지터 · 단발 튐(GPS 스파이크) · 고의 이탈(연속 4회)을 섞어 핑 → 오탐 0건, 이탈은 정확히 3번째에 경고
 
+  7) KPI 목표 판정 (engines/kpi.py): 배차 p95 < 3초 · 거절률 < 15~20% · 단순 최단거리 대비 공차 거리 단축 ·
+     적재 오탐 0% · GPS 오알람 < 5% — GET /admin/kpi 와 같은 잣대
+
 실행: 수정본 폴더에서
     python tests/stress_test.py                    # 기본 (주문 120 · 기사 45)
     python tests/stress_test.py --quick            # CI 용 (주문 30 · 기사 18)
     python tests/stress_test.py --out docs/benchmark_metrics.json
+      → backend/data/benchmark_metrics.json 에도 같은 내용을 저장 (GET /admin/kpi 가 GPS 오알람률을 읽음)
 결과: '결과: N개 통과 · 0개 실패' + 메트릭 JSON
 """
 
@@ -33,6 +37,7 @@ sys.path.insert(0, ROOT)
 
 from backend.core.database import Store  # noqa: E402
 from backend.engines import compliance_engine as comp  # noqa: E402
+from backend.engines import kpi  # noqa: E402
 from backend.engines import tracking_engine as te  # noqa: E402
 from backend.engines.matcher import ml_ranker  # noqa: E402
 from backend.engines.packer.samples import SAMPLES  # noqa: E402
@@ -50,6 +55,27 @@ args = ap.parse_args()
 if args.quick:
     args.orders, args.drivers = 30, 18
 rng = random.Random(args.seed)
+
+# ------------------------------------------------------------------ 시뮬레이션 시계
+# 러시아워 · 모의 기상 · 시간대별 수요가 '지금 시각'을 읽기 때문에, 실제 시계를 쓰면 같은 시드라도
+# 실행 시각마다 결과가 달라진다. → 고정된 하루(2026-11-16)를 0시부터 24시까지 진행시키는 시계로 바꾼다.
+SIM_DAY = datetime(2026, 11, 16)
+_sim_now = [SIM_DAY]
+
+
+class SimDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return _sim_now[0]
+
+
+def set_sim_clock(hour: int, minute: int = 0):
+    _sim_now[0] = SIM_DAY.replace(hour=hour, minute=minute)
+
+
+for _name, _mod in list(sys.modules.items()):
+    if _name.startswith(("backend.services", "backend.engines", "backend.core", "simulator"))             and getattr(_mod, "datetime", None) is datetime:
+        _mod.datetime = SimDateTime
 
 store = Store()
 store._run_matching = lambda *a, **k: None  # 주문 등록 때 바로 매칭하지 않고 틱마다 묶어서 (마이크로 배치)
@@ -112,10 +138,11 @@ t_start = time.perf_counter()
 tick_latency = []
 for h, n in enumerate(per_hour):
     for k in range(n):
+        set_sim_clock(h, k * 60 // max(n, 1))   # 그 시간대 안에서 주문 순서대로 시각을 나눈다
         new_order(h, k)
         if (k + 1) % 4 == 0 or k == n - 1:   # 주문 4건(≈3~5초 창)마다 한 번 배정 라운드
             t0 = time.perf_counter()
-            store._matching_round(datetime.now())
+            store._matching_round(SimDateTime.now())
             tick_latency.append((time.perf_counter() - t0) * 1000)
             for o in [o for o in store.orders.values() if o["status"] == "MATCHING" and o["offer"]]:
                 did = o["offer"]["driver_id"]
@@ -129,7 +156,7 @@ for h, n in enumerate(per_hour):
                 else:
                     o["declined"].append(did)
                     o["offer"] = None
-                    store._log(o, "declined", did, datetime.now(), note="스트레스 테스트 로지스틱 거절")
+                    store._log(o, "declined", did, SimDateTime.now(), note="스트레스 테스트 로지스틱 거절")
                     declined += 1
             # 운행 완료 처리 → 기사를 하차지 공차로 되돌린다 (공급 순환)
             for o in list(store.orders.values()):
@@ -200,6 +227,26 @@ r = store.ingest_ping({"order_id": o["id"], "driver_id": "D-999", "lat": 37.0, "
 after = sum(1 for a in store.anomalies.values() if a["type"] == "SUSPICIOUS_REOUTSOURCING")
 check("배정 기사가 아닌 단말 핑 → 거절 + 재위탁 의심 기록", not r["applied"] and after == before + 1)
 
+# ------------------------------------------------------------------ 7) KPI 목표 판정 (GET /admin/kpi 와 같은 잣대)
+section("KPI 목표 판정 (engines/kpi.py)")
+normal_runs = len(seed_runs[:8]) - dev_runs
+gps_fp = round(100 * false_alarms / normal_runs, 1) if normal_runs else None
+kpi_rows = [
+    kpi.evaluate("dispatch_p95_sec", round(p95 / 1000, 4), source="스트레스 테스트", basis=f"라운드 {len(tick_latency)}회"),
+    kpi.evaluate("rejection_rate_pct", rej_rate, source="스트레스 테스트", basis=f"제안 {offers}건 · 거절 {declined}건"),
+    kpi.evaluate("deadhead_vs_nearest_pct", m["deadhead_vs_nearest_pct"], source="스트레스 테스트",
+                 basis="같은 후보 안에서 등록 순서 · 최단거리 배정과 비교"),
+    kpi.evaluate("packing_violation_pct", round(100 * violations / checked, 2) if checked else None,
+                 source="스트레스 테스트", basis=f"검증 {checked}건 · 위반 {violations}건"),
+    kpi.evaluate("gps_false_alarm_pct", gps_fp, source="스트레스 테스트",
+                 basis=f"정상 운행 {normal_runs}회 · 단발 튐 {spikes}회 · 오알람 {false_alarms}건"),
+]
+for r in kpi_rows:
+    print(f"  [{r['status_label']}] {r['name']}: {r['display']} (목표 {r['target']}) — {r['basis']}")
+check("배차 지연 p95 KPI 달성 (< 3초)", kpi_rows[0]["status"] == "pass", kpi_rows[0]["display"])
+check("적재 오탐 KPI 달성 (0%)", kpi_rows[3]["status"] == "pass", kpi_rows[3]["display"])
+check("GPS 오알람 KPI 달성 (< 5%)", kpi_rows[4]["status"] == "pass", kpi_rows[4]["display"])
+
 metrics = {
     "generated_at": datetime.now().isoformat(timespec="seconds"), "seed": args.seed,
     "drivers": args.drivers, "orders": len(stress_orders), "rounds": len(tick_latency),
@@ -209,17 +256,24 @@ metrics = {
     "dispatch_latency_p95_ms": round(p95, 1), "dispatch_latency_p95_sec": round(p95 / 1000, 4),
     "dispatch_latency_avg_ms": round(sum(lat) / len(lat), 1) if lat else None,
     "empty_deadhead_km_reduction_pct": m["empty_deadhead_km_reduction_pct"],
+    "deadhead_vs_nearest_pct": m["deadhead_vs_nearest_pct"],
     "threshold_filtered_pairs": m["threshold_filtered"], "ml_threshold": m["ml_threshold"],
     "packing_checked": checked, "packing_violations": violations,
     "overload_rate_pct": round(100 * violations / checked, 2) if checked else 0.0,
     "gps": {"runs": len(seed_runs[:8]), "spikes": spikes, "false_alarms": false_alarms, "deviation_runs": dev_runs,
-            "detected": detected, "alert_ping_index": alert_at, "engine": "Shapely" if te.HAS_SHAPELY else "python"},
+            "detected": detected, "alert_ping_index": alert_at, "engine": "Shapely" if te.HAS_SHAPELY else "python",
+            "false_alarm_rate_pct": gps_fp},
+    "kpi": [{k: r[k] for k in ("key", "name", "target", "value", "display", "status", "basis")} for r in kpi_rows],
+    "kpi_summary": kpi.summary(kpi_rows),
     "elapsed_sec": round(elapsed, 1),
 }
 print("\n" + json.dumps(metrics, ensure_ascii=False, indent=2))
 if args.out:
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(metrics, f, ensure_ascii=False, indent=2)
-    print(f"저장: {args.out}")
+    # 보고서용(--out) + /admin/kpi 용(backend/data, 도커 이미지에 포함되는 위치)
+    app_copy = os.path.join(ROOT, "backend", "data", "benchmark_metrics.json")
+    for path in dict.fromkeys([os.path.abspath(args.out), app_copy]):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(metrics, f, ensure_ascii=False, indent=2)
+        print(f"저장: {path}")
 finish()

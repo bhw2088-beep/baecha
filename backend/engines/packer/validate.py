@@ -1,14 +1,15 @@
 """
 적재 결과 독립 검증기.
 
-엔진 내부 로직과 별개로, '결과 좌표만 보고' 모든 제약을 다시 검사한다.
-→ 우리 EP 엔진의 결과가 정말 제약을 지키는지 확인하고,
-→ py3dbp 같은 외부 라이브러리 결과도 같은 잣대로 비교할 수 있다.
+엔진 내부 로직과 별개로, '결과 좌표만 보고' 적재 규칙 R0~R10(rules.py)을 다시 채점한다.
+→ 규칙 + EP 엔진의 결과가 정말 규칙을 지키는지 확인한다 (엔진 버그 · 저장된 옛 계획 · 손으로 만든 좌표도 같은 잣대).
+규칙 이름 · 번호 · 적용 단계는 rules.py 에서 가져오므로 엔진 · 화면과 항상 같다.
 
 입력 rows: Placement.to_dict() 형식 (x,y,z,length,width,height,weight_kg,orig,upright,stackable,max_top_load,drop)
 """
 
 from ..validation_engine import axle_balance, safety_check
+from .rules import check_row
 from .trucks import Container
 
 EPS = 1e-6
@@ -26,21 +27,20 @@ def validate(container: Container, rows: list[dict], *, min_support: float, lifo
     ids = [r["item_id"] for r in rows]
     checks = []
 
-    def add(key, name, rule, bad, detail_ok, detail_bad, warn=False):
-        status = "pass" if not bad else ("warn" if warn else "fail")
-        checks.append({"key": key, "name": name, "rule": rule, "status": status,
-                       "detail": detail_ok if not bad else detail_bad, "violations": sorted(set(bad))[:50]})
+    def add(key, bad, detail_ok, detail_bad, rule=None):
+        checks.append(check_row(key, "fail" if bad else "pass", detail_bad if bad else detail_ok,
+                                sorted(set(bad))[:50], rule=rule))
 
-    # C0 차량-화물 호환
-    add("compat", "차량-화물 호환", "냉장 화물은 냉장 차량에만", ["-"] if cold_chain and not c.refrigerated else [],
+    # R0 차량-화물 호환
+    add("compat", ["-"] if cold_chain and not c.refrigerated else [],
         "냉장 조건 충족" if cold_chain else "상온 화물", f"{c.name}은(는) 냉장 차량이 아닙니다")
 
-    # C1 경계
+    # R1 경계
     bad = [ids[i] for i, (x0, x1, y0, y1, z0, z1) in enumerate(box)
            if x0 < 0 or y0 < 0 or z0 < 0 or x1 > c.length or y1 > c.width or z1 > c.height]
-    add("bounds", "적재함 경계", "모든 상자가 적재함 안쪽", bad, "모두 적재함 내부", f"{len(bad)}개 상자가 적재함 밖으로 돌출")
+    add("bounds", bad, "모두 적재함 내부", f"{len(bad)}개 상자가 적재함 밖으로 돌출")
 
-    # C2 비중첩
+    # R2 비중첩
     bad = []
     for i in range(n):
         for j in range(i + 1, n):
@@ -48,19 +48,19 @@ def validate(container: Container, rows: list[dict], *, min_support: float, lifo
             if (_overlap_1d(a[0], a[1], b[0], b[1]) > EPS and _overlap_1d(a[2], a[3], b[2], b[3]) > EPS
                     and _overlap_1d(a[4], a[5], b[4], b[5]) > EPS):
                 bad += [ids[i], ids[j]]
-    add("overlap", "상자 간 비중첩", "부피가 겹치는 상자 없음", bad, "겹침 없음", f"{len(set(bad))}개 상자가 서로 겹침")
+    add("overlap", bad, "겹침 없음", f"{len(set(bad))}개 상자가 서로 겹침")
 
-    # C3 방향
+    # R3 방향
     bad = [r["item_id"] for r in rows if r["upright"] and r["height"] != r["orig"][2]]
-    add("orientation", "방향 (세움 고정)", "세움 고정 품목은 높이축 유지", bad,
-        "세움 고정 품목 모두 정방향", f"{len(bad)}개 품목이 눕혀지거나 뒤집힘")
+    add("orientation", bad, "세움 고정 품목 모두 정방향", f"{len(bad)}개 품목이 눕혀지거나 뒤집힘")
 
-    # C4 중량
+    # R4 중량
     total = sum(r["weight_kg"] for r in rows)
-    add("weight", "최대 적재중량", f"총 중량 ≤ {c.max_weight:,.0f}kg", ["-"] if total > c.max_weight + EPS else [],
-        f"{total:,.0f}kg / {c.max_weight:,.0f}kg", f"{total:,.0f}kg — {total - c.max_weight:,.0f}kg 초과")
+    add("weight", ["-"] if total > c.max_weight + EPS else [],
+        f"{total:,.0f}kg / {c.max_weight:,.0f}kg", f"{total:,.0f}kg — {total - c.max_weight:,.0f}kg 초과",
+        rule=f"총 중량 ≤ {c.max_weight:,.0f}kg")
 
-    # C5 지지면 + 하중 분담 계산
+    # R5 지지면 + 하중 분담 계산
     supporters: list[list[tuple[int, float]]] = [[] for _ in range(n)]
     floating, min_ratio = [], 1.0
     for i in range(n):
@@ -80,10 +80,10 @@ def validate(container: Container, rows: list[dict], *, min_support: float, lifo
             floating.append(ids[i])
         if tot > 0:
             supporters[i] = [(j, a / tot) for j, a in areas]
-    add("support", "지지면 (안정성)", f"바닥 면적의 {min_support:.0%} 이상이 아래 상자/바닥에 닿음", floating,
-        f"최소 지지 비율 {min_ratio:.0%}", f"{len(floating)}개 상자가 지지 부족 (공중 부양 위험)")
+    add("support", floating, f"최소 지지 비율 {min_ratio:.0%}", f"{len(floating)}개 상자가 지지 부족 (공중 부양 위험)",
+        rule=f"바닥 면적의 {min_support:.0%} 이상이 아래 상자/바닥에 닿음")
 
-    # C6 적층 불가 / 상부 허용하중 — 위에서부터 아래로 하중 누적
+    # R6 적층 불가 / 상부 허용하중 — 위에서부터 아래로 하중 누적
     load = [0.0] * n
     for i in sorted(range(n), key=lambda k: -box[k][4]):
         for j, share in supporters[i]:
@@ -97,11 +97,10 @@ def validate(container: Container, rows: list[dict], *, min_support: float, lifo
             bad.append(ids[j])
         if cap > 0:
             worst = max(worst, load[j] / cap)
-    add("stacking", "적층 · 상부 허용하중", "파손주의 품목 위 적재 금지, 상부 하중 ≤ 허용하중", bad,
-        f"최대 하중 사용률 {worst:.0%}" if worst else "하중 제한 품목 위 적재 없음",
-        f"{len(bad)}개 상자가 허용하중 초과/파손주의 위 적재")
+    add("stacking", bad, f"최대 하중 사용률 {worst:.0%}" if worst else "하중 제한 품목 위 적재 없음",
+        f"{len(bad)}개 상자가 허용하중 초과/적층 불가 품목 위 적재")
 
-    # C6b 파손주의 · 냉동 화물 최상단 배치 강제 — 표시된 상자 위(바닥 면적이 겹치는 더 높은 곳)에 다른 상자가 있으면 위반
+    # R7 파손주의 · 냉동 화물 최상단 배치 강제 — 표시된 상자 위(바닥 면적이 겹치는 더 높은 곳)에 다른 상자가 있으면 위반
     tops = [i for i, r in enumerate(rows) if r.get("fragile") or r.get("frozen")]
     bad = []
     for i in tops:
@@ -119,11 +118,10 @@ def validate(container: Container, rows: list[dict], *, min_support: float, lifo
         kinds.append(f"파손주의 {sum(1 for i in tops if rows[i].get('fragile'))}개")
     if any(rows[i].get("frozen") for i in tops):
         kinds.append(f"냉동 {sum(1 for i in tops if rows[i].get('frozen'))}개")
-    add("top_only", "최상단 배치 (파손주의 · 냉동)", "파손주의 · 냉동 표시 상자 위에는 아무것도 싣지 않음", bad,
-        (" · ".join(kinds) + " 모두 최상단") if tops else "해당 품목 없음",
+    add("top_only", bad, (" · ".join(kinds) + " 모두 최상단") if tops else "해당 품목 없음",
         f"{len(set(bad))}개 상자 위에 다른 화물이 실림")
 
-    # C7 하차 순서
+    # R8 하차 순서
     bad = []
     if lifo:
         for i in range(n):
@@ -137,22 +135,21 @@ def validate(container: Container, rows: list[dict], *, min_support: float, lifo
                     bad += [ids[i], ids[j]]
     drops = sorted({r["drop"] for r in rows})
     access = "측면 하역 가능 차량: 위 적재만 검사" if c.side_access else "후문 하역: 위·도어 방향 가로막힘 검사"
-    add("lifo", "하차 순서 (LIFO)", access, bad,
-        f"하차지 {len(drops)}곳 · 막힘 없음" if lifo else "검사 꺼짐", f"{len(set(bad))}개 상자가 하차 순서상 가로막힘")
+    add("lifo", bad, f"하차지 {len(drops)}곳 · 막힘 없음" if lifo else "검사 꺼짐",
+        f"{len(set(bad))}개 상자가 하차 순서상 가로막힘", rule=access)
 
-    # C8 보수적 안전율 (engines/validation_engine.py) — 포장 · 측정 오차 감안, 용량의 90% 초과 시 차단
+    # R9 보수적 안전율 (engines/validation_engine.py) — 포장 · 측정 오차 감안, 용량의 90% 초과 시 차단
     vol_util = sum(r["length"] * r["width"] * r["height"] for r in rows) / c.volume if c.volume else 0
     wt_util = total / c.max_weight if c.max_weight else 0
     sc = safety_check(vol_util, wt_util, safety_margin)
-    checks.append({"key": "safety", "name": f"보수적 안전율 ({safety_margin:.0%})",
-                   "rule": f"부피 · 중량 사용률 {sc['warn_at']:.0%} 초과 경고 · {sc['limit']:.0%} 초과 차단",
-                   "status": sc["status"], "detail": sc["detail"], "violations": [] if sc["status"] == "pass" else ["-"]})
+    row = check_row("safety", sc["status"], sc["detail"], [] if sc["status"] == "pass" else ["-"],
+                    rule=f"부피 · 중량 사용률 {sc['warn_at']:.0%} 초과 경고 · {sc['limit']:.0%} 초과 차단")
+    row["name"] += f" ({safety_margin:.0%})"
+    checks.append(row)
 
-    # C9 축중량 균형 (산안법 제173조 편하중 방지) — 무게중심 · 앞축/뒤축 하중
+    # R10 축중량 균형 (산안법 제173조 편하중 방지) — 무게중심 · 앞축/뒤축 하중
     ab = axle_balance(rows, c.length, c.width, c.max_weight)
-    checks.append({"key": "cog", "name": "축중량 균형 (산안법 제173조)",
-                   "rule": "좌우 편차 ≤ 10%(15% 초과 차단), 전후 무게중심 20~65%(15~75% 밖 차단)",
-                   "status": ab["status"],
-                   "detail": ab["detail"] + (" — 무게 배분 조정 필요" if ab["status"] != "pass" else ""),
-                   "violations": [] if ab["status"] == "pass" else ["-"], "axle": ab})
+    checks.append(check_row("cog", ab["status"],
+                            ab["detail"] + (" — 무게 배분 조정 필요" if ab["status"] != "pass" else ""),
+                            [] if ab["status"] == "pass" else ["-"], axle=ab))
     return checks

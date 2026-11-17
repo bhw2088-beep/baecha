@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections import deque
 
 from ..core.redis_client import available, get_redis
 
@@ -25,6 +27,26 @@ MAXLEN = 20_000  # 스트림 최대 길이 (시뮬레이터가 XADD 할 때 대�
 
 log = logging.getLogger("uvicorn.error")
 stats = {"running": False, "processed": 0, "ignored": 0, "errors": 0, "last_error": None}
+# 관제 반영 지연 (KPI): Redis 메시지 ID 앞부분 = XADD 시각(ms, API 가 핑을 받은 직후) → 저장소 반영 시각까지
+_lags_ms: deque[float] = deque(maxlen=2000)
+
+
+def _lag_ms(msg_id) -> float | None:
+    try:
+        sid = msg_id.decode() if isinstance(msg_id, bytes) else str(msg_id)
+        return max(0.0, time.time() * 1000 - int(sid.split("-")[0]))
+    except (ValueError, AttributeError):
+        return None
+
+
+def relay_latency() -> dict:
+    """GPS 핑 수신 → 관제 데이터 반영 지연 (최근 2,000건). Redis 가 없으면 count 0."""
+    lags = sorted(_lags_ms)
+    if not lags:
+        return {"count": 0, "p95_ms": None, "avg_ms": None, "running": stats["running"]}
+    p95 = lags[min(len(lags) - 1, int(round(0.95 * (len(lags) - 1))))]
+    return {"count": len(lags), "p95_ms": round(p95, 1), "avg_ms": round(sum(lags) / len(lags), 1),
+            "running": stats["running"]}
 
 
 def ensure_group():
@@ -70,6 +92,9 @@ async def run(store):
                     try:
                         if store.apply_gps(fields):
                             stats["processed"] += 1
+                            lag = _lag_ms(msg_id)
+                            if lag is not None and lag < 60_000:  # 백엔드 재시작 동안 쌓인 밀린 메시지는 제외
+                                _lags_ms.append(lag)
                         else:
                             stats["ignored"] += 1
                     except Exception as e:  # noqa: BLE001 — 잘못된 메시지는 건너뛴다

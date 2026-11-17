@@ -85,7 +85,7 @@ def packing_plan(body: PackPlanIn):
     """CPU 연산이므로 동기 함수로 두어 스레드풀에서 실행 (다른 요청을 막지 않음). 저장소는 건드리지 않는다."""
     try:
         return packing_service.plan(body.item_specs(), truck_type=body.truck_type, cold_chain=body.cold_chain,
-                                    options=body.options.to_engine(), compare_baseline=body.compare_baseline)
+                                    options=body.options.to_engine())
     except packing_service.PackingError as e:
         raise ApiError(400, str(e))
 

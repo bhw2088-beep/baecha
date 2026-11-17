@@ -529,7 +529,7 @@ def new_order_page():
     # ---------------------------------------------------------------- ③ 시뮬레이션 설정
     trucks = [t for t in pack_meta["trucks"] if t["refrigerated"] or not cold]
     with st.container(border=True):
-        ui.section("③ 3D 적재 시뮬레이션", "Extreme Point 휴리스틱 · 필수 제약 적용")
+        ui.section("③ 3D 적재 시뮬레이션", "적재 규칙 R0~R10 + Extreme Point 탐색")
         a, b, c = st.columns([1.2, 1.3, 1.3])
         truck_opts = ["AUTO"] + [t["name"] for t in trucks]
         truck_sel = a.selectbox("차량", truck_opts, key="no_truck",
@@ -540,13 +540,12 @@ def new_order_page():
         d, e, f = st.columns([1.2, 1.3, 1.3])
         min_support = d.slider("최소 지지면 비율", 50, 100, 80, 5, format="%d%%", key="no_support",
                                help="상자 바닥 면적 중 아래 상자/바닥에 닿아야 하는 비율 (공중 부양 방지)") / 100
-        lifo = e.toggle("하차 순서(LIFO) 제약", value=True, key="no_lifo",
+        lifo = e.toggle("R8 하차 순서(LIFO) 규칙", value=True, key="no_lifo",
                         help="먼저 내릴 화물의 위·앞(뒷문 쪽)을 나중에 내릴 화물이 막지 않게 함")
-        compare = f.toggle("py3dbp 기준선과 비교", value=True, key="no_compare",
-                           help="오픈소스 py3dbp 결과를 같은 제약 검증기로 채점해 나란히 보여줌")
+        f.caption("R9 안전율 · R10 좌우 균형은 항상 적용 — 한도(90%)까지만 싣고, 같은 줄 양쪽 중 무게중심이 "
+                  "가운데로 오는 쪽에 놓습니다.")
         request = {"items": items, "truck_type": None if truck_sel == "AUTO" else truck_sel, "cold_chain": cold,
-                   "options": {"merit": merit, "sort": sort, "min_support": min_support, "lifo": lifo},
-                   "compare_baseline": compare}
+                   "options": {"merit": merit, "sort": sort, "min_support": min_support, "lifo": lifo}}
         run = st.button("3D 적재 시뮬레이션 실행", icon=":material/view_in_ar:", type="primary",
                         disabled=not items or bool(errors), width="stretch")
     if run:
@@ -554,7 +553,7 @@ def new_order_page():
             res = ui.act(api.post, "/packing/plan", request)
         if res:
             st.session_state.no_plan = {"hash": _hash(request), "res": res, "req": request}
-            for k in ("no_step_ep", "no_step_base", "no_view"):
+            for k in ("no_step_ep",):
                 st.session_state.pop(k, None)
 
     plan = st.session_state.get("no_plan")
@@ -597,14 +596,9 @@ def _results(res: dict):
         {"label": "계산 시간", "value": m["elapsed_ms"], "unit": "ms", "note": "EP 휴리스틱"},
     ])
 
-    has_base = "baseline" in res
     left, right = st.columns([2.2, 1], gap="large")
+    view, data = "ep", res
     with left:
-        view = "ep"
-        if has_base:
-            view = st.segmented_control("결과 보기", ["ep", "base"], default="ep", key="no_view",
-                                        format_func={"ep": "EP 엔진 (제약 적용)", "base": "py3dbp 기준선"}.get) or "ep"
-        data = res if view == "ep" else res["baseline"]
         rows = data["placements"]
         violations = {v for c in data["constraints"] if c["status"] == "fail" for v in c["violations"]}
         if not rows:
@@ -612,24 +606,25 @@ def _results(res: dict):
             return
         s1, s2 = st.columns([4, 1.2], vertical_alignment="bottom")
         step = s1.slider("적재 단계 (상자를 놓는 순서대로 재생)", 1, len(rows), len(rows), key=f"no_step_{view}")
-        show_eps = s2.toggle("EP 표시", value=view == "ep", disabled=view != "ep", key="no_show_eps")
+        show_eps = s2.toggle("EP 표시", value=True, key="no_show_eps")
         eps = chosen = None
-        if view == "ep" and show_eps and step - 1 < len(res["steps"]):
+        if show_eps and step - 1 < len(res["steps"]):
             eps = res["steps"][step - 1]
             chosen = rows[step - 1]["ep"]
         cur = rows[step - 1]
         rot = " · 회전 배치" if cur["rotated"] else ""
         sup = f" · 지지 {cur['support_ratio'] * 100:.0f}%" if cur.get("support_ratio") is not None else ""
+        sup += " · R10 좌우 균형으로 반대편 배치" if cur.get("balanced") else ""
         ep_txt = f"후보 EP {len(eps)}개 중 ({cur['x']}, {cur['y']}, {cur['z']}) 선택" if eps else f"위치 ({cur['x']}, {cur['y']}, {cur['z']})"
         st.caption(f"**{step}번째** · {cur['name']} `{cur['item_id']}` — {ep_txt} · "
                    f"{cur['length']}×{cur['width']}×{cur['height']}mm{rot}{sup}")
         fig = packviz.figure(truck, rows, upto=step if step < len(rows) else None, eps=eps, chosen_ep=chosen,
                              violations=violations)
         st.plotly_chart(fig, key=f"pack3d_{view}", config={"displaylogo": False}, theme=None)
-        if view == "base" and violations:
-            st.caption(f"빨간 상자 {len(violations)}개 = 검증기가 찾은 제약 위반 상자")
+        if violations:
+            st.caption(f"빨간 상자 {len(violations)}개 = 검증기가 찾은 규칙 위반 상자")
     with right:
-        _constraint_card(data["constraints"], "제약 조건 검증" + (" · py3dbp" if view == "base" else ""))
+        _constraint_card(data["constraints"], "적재 규칙 검증 (R0~R10)")
         if data["unplaced"]:
             ui.section(f"미적재 {len(data['unplaced'])}개")
             ui.html('<div class="ct-card">' + "".join(
@@ -642,9 +637,6 @@ def _results(res: dict):
                 f'<div class="ct-item ct-row"><span class="ct-strong">{c["truck_type"]}</span>'
                 f'{ui.pill(c.get("note", "-"), "green" if c["fits"] else ("gray" if not c["evaluated"] else "amber"))}</div>'
                 for c in res["candidates"]) + "</div>")
-
-    if has_base:
-        _comparison(res)
 
     with st.expander("적재 순서표 · 적재 계획 JSON (팀 공통 포맷)"):
         rows = res["placements"]
@@ -673,40 +665,12 @@ def _constraint_card(checks: list[dict], title: str):
         body += (f'<div class="ct-item" style="display:flex;gap:10px;align-items:flex-start">'
                  f'<span style="flex:none;width:22px;height:22px;border-radius:50%;background:{bg};color:{fg};'
                  f'display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-size:12px">{icon}</span>'
-                 f'<div style="min-width:0"><div class="ct-strong" style="font-size:13.5px">{c["name"]}</div>'
+                 f'<div style="min-width:0"><div class="ct-strong" style="font-size:13.5px">'
+                 f'{c["code"] + " " if c.get("code") else ""}{c["name"]}</div>'
                  f'<div class="ct-muted" style="font-size:12px">{c["detail"]}</div>'
-                 f'<div class="ct-muted" style="font-size:11px;opacity:.75">{c["rule"]}</div></div></div>')
+                 f'<div class="ct-muted" style="font-size:11px;opacity:.75">{c["rule"]}'
+                 f'{" · " + c["stage"] if c.get("stage") else ""}</div></div></div>')
     ui.html(f'<div class="ct-card" style="padding:12px 16px">{body}</div>')
-
-
-def _comparison(res: dict):
-    ep, base = res, res["baseline"]
-
-    def fails(d):
-        return {c["key"]: len(c["violations"]) if c["status"] == "fail" else 0 for c in d["constraints"]}
-
-    fe, fb = fails(ep), fails(base)
-    total_b = sum(fb.values())
-    names = {c["key"]: c["name"] for c in ep["constraints"]}
-    rows = [
-        ("적재 수량", f"{ep['metrics']['placed']}/{ep['metrics']['total']}", f"{base['metrics']['placed']}/{base['metrics']['total']}"),
-        ("부피 적재율", f"{ep['metrics']['volume_util'] * 100:.1f}%", f"{base['metrics']['volume_util'] * 100:.1f}%"),
-        ("계산 시간", f"{ep['metrics']['elapsed_ms']}ms", f"{base['metrics']['elapsed_ms']}ms"),
-    ]
-    for key in ("support", "orientation", "stacking", "lifo", "overlap", "bounds", "weight"):
-        rows.append((f"위반 · {names[key]}", f"{fe.get(key, 0)}개", f"{fb.get(key, 0)}개"))
-    ui.section("EP 엔진 vs py3dbp 기준선", "같은 차량 · 같은 품목 · 같은 검증기로 채점")
-    head = ('<div class="ct-row" style="padding:6px 0;font-size:12px;color:var(--muted);font-weight:700">'
-            '<span style="flex:2">항목</span><span style="flex:1;text-align:right">EP 엔진</span>'
-            '<span style="flex:1;text-align:right">py3dbp</span></div>')
-    body = "".join(
-        f'<div class="ct-row" style="padding:7px 0;border-top:1px solid var(--line);font-size:13.5px">'
-        f'<span style="flex:2">{k}</span><span style="flex:1;text-align:right" class="ct-strong">{a}</span>'
-        f'<span style="flex:1;text-align:right;{"color:#B42318;font-weight:800" if b not in ("0개",) and k.startswith("위반") else ""}">{b}</span></div>'
-        for k, a, b in rows)
-    verdict = (f"py3dbp 결과는 필수 제약을 {total_b}건 위반 — 실제 상차에 쓸 수 없습니다." if total_b
-               else "두 결과 모두 필수 제약을 만족합니다.")
-    ui.html(f'<div class="ct-card">{head}{body}</div>' + ui.banner(verdict, "amber" if total_b else "green"))
 
 
 # ======================================================================= register

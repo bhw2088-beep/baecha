@@ -85,6 +85,7 @@ class Placement:
     support_ratio: float = 1.0
     supporters: list[tuple[int, float]] = field(default_factory=list)  # (placement index, 하중 분담 비율)
     load: float = 0.0  # 위에서 누르는 하중 (kg)
+    balanced: bool = False  # R10 좌우 균형 때문에 같은 줄 반대편에 놓았는지
 
     @property
     def x1(self) -> int:
@@ -111,5 +112,5 @@ class Placement:
             "max_top_load": None if b.cap == float("inf") else b.cap,
             "orig": [b.l, b.w, b.h], "rotated": (self.dx, self.dy, self.dz) != (b.l, b.w, b.h),
             "support_ratio": round(self.support_ratio, 3), "load_on_top": round(self.load, 1),
-            "ep": list(self.ep) if self.ep else None,
+            "ep": list(self.ep) if self.ep else None, "balanced": self.balanced,
         }

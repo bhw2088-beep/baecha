@@ -31,6 +31,9 @@ class RoundLogOut(BaseModel):
     deadhead_reduction_pct: float | None
     threshold_filtered: int
     failed: int
+    nearest_assigned: int | None = None          # 단순 최단거리 기준선 배정 수
+    nearest_avg_km: float | None = None          # 단순 최단거리 기준선 평균 상차(공차) 거리
+    deadhead_vs_nearest_pct: float | None = None  # 기준선 대비 공차 거리 단축률
 
 
 class MatchingMetricsOut(BaseModel):
@@ -39,7 +42,9 @@ class MatchingMetricsOut(BaseModel):
     dispatch_latency_p95_sec: float | None
     dispatch_latency_p95_ms: float | None
     target_p95_sec: float
-    empty_deadhead_km_reduction_pct: float | None
+    empty_deadhead_km_reduction_pct: float | None   # 헝가리안 vs 점수순 그리디
+    deadhead_vs_nearest_pct: float | None = None    # 헝가리안 vs 단순 최단거리 매칭 (KPI 기준선)
+    target_deadhead_vs_nearest_pct: float = 10.0
     rejection_rate_pct: float | None
     threshold_filtered: int
     ml_threshold: float

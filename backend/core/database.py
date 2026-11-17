@@ -406,7 +406,8 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, Tra
                 o["match"] = {"driver_id": o["driver_id"], "pickup_km": km, "volume_util": vol, "weight_util": wgt,
                               "util": util, "score": self._score(km, util) if util is not None else None,
                               "offers": 1, "by": "auto"}
-                offered = o["created_at"] + (o["assigned_at"] - o["created_at"]) / 3
+                # 실제 흐름과 같게: 등록 직후 매칭 라운드가 1초 미만에 제안(기록은 초 단위) → 나머지는 기사 응답 시간
+                offered = o["created_at"]
                 self._log(o, "offered", o["driver_id"], offered)
                 self._log(o, "accepted", o["driver_id"], o["assigned_at"])
             for driver_id in o["declined"]:

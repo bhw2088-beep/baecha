@@ -49,6 +49,7 @@ EVENT_LABEL = {
     "deviation": "경로 이탈 감지", "delay": "도착 지연 감지", "reoutsource": "불법 재위탁 의심",
     "blacklist": "기사 이용 제한", "unblacklist": "기사 제한 해제", "resolve": "이상 감지 조치",
     "approve": "가입 승인", "reject": "가입 반려", "payout": "기사 수익금 송금",
+    "signup_pass": "가입 자동 검증 통과", "signup_reject": "가입 자동 검증 차단",
 }
 FINANCIAL = {"request", "pay", "refund", "payout"}
 

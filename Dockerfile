@@ -29,6 +29,9 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY . .
 RUN mkdir -p backend/data/pod_photos && chown -R appuser:appuser backend/data
 
+# 화면 언어를 한국어로 표시 · 브라우저 자동 번역 끄기 (번역 때문에 문장이 깨지는 문제 방지)
+RUN python tools/patch_streamlit_lang.py
+
 USER appuser
 
 EXPOSE 8000 8501

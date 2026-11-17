@@ -2,14 +2,15 @@
 #
 #   실행:  docker compose -f docker-compose.prod.yml up --build -d
 #   점검:  docker compose -f docker-compose.prod.yml ps
+#   가상 GPS 시뮬레이터까지:  docker compose -f docker-compose.prod.yml --profile sim up -d
 #
 # 개발용(docker-compose.yml)과 다른 점
 #   - DB · Redis 포트를 밖으로 열지 않음 (내부 전용 data 망 안에서만 접속)
-#   - 모든 서비스 restart: unless-stopped (재부팅 · 장애 후 자동 재시작)
 #   - 백엔드 · 프론트엔드 헬스체크 → 준비된 뒤에 다음 서비스 시작
+#   - 서비스별 CPU · 메모리 상한 (한 서비스 폭주가 서버 전체를 멈추지 않게)
+#   - Redis 데이터 디스크 보존 (appendonly + redis_data 볼륨)
 #   - 백엔드는 워커 1개로 실행: 저장소가 '메모리 작업본 + PostgreSQL write-behind' 구조라 한 프로세스만 써야 한다
-#     (여러 대로 늘리려면 저장소를 DB 트랜잭션 방식으로 바꿔야 함 → 명세_비교_정리.md 9장 제한 사항)
-#   - 가상 GPS 시뮬레이터는 프로필 'sim' 일 때만:  ... --profile sim up -d
+#     (여러 대로 늘리려면 저장소를 DB 트랜잭션 방식으로 바꿔야 함 → docs/명세_비교_정리.md 9장 제한 사항)
 #   - 무중단 배포: 이미지만 새로 빌드한 뒤  up -d --no-deps frontend  처럼 서비스별로 교체
 #     (backend 는 1개 프로세스라 교체 순간 몇 초 끊김 — 앞단에 프록시 · 재시도 권장)
 #
@@ -18,15 +19,32 @@
 #                    edge(외부 공개)                       = backend · frontend · simulator
 #     → DB · Redis 는 data 망에만 있어 웹 화면 · 외부에서 직접 닿을 수 없다. backend 만 두 망에 걸쳐 중계.
 #   - 앱 컨테이너: root 아닌 appuser 실행(Dockerfile) · 리눅스 권한(capability) 전부 제거 · 권한 상승 금지
-#   - 서비스별 CPU · 메모리 상한 (한 서비스 폭주가 서버 전체를 멈추지 않게)
 # .env 의 POSTGRES_PASSWORD · SIM_API_KEY · ADMIN_APPROVAL_CODE 는 반드시 운영용 값으로 바꿀 것.
 name: baecha-prod
 
-x-app-security: &app-security
+# ---- 공통 설정 (앵커) ----------------------------------------------------------
+# 앱 서비스(backend · worker · frontend · simulator)는 이미지 하나(baecha-app:prod)를 같이 쓴다.
+#   → 빌드는 backend 에서 한 번만 하고, 나머지는 그 이미지를 재사용
+x-app: &app
+  image: baecha-app:prod
+  pull_policy: never        # 레지스트리에서 받지 않고 backend 가 빌드한 이미지를 쓴다
+  restart: unless-stopped
   security_opt:
     - no-new-privileges:true
   cap_drop:
     - ALL
+
+# 컨테이너끼리는 서비스 이름(db, redis)으로 접속 (.env 의 localhost 주소를 덮어씀)
+x-app-env: &app-env
+  TZ: Asia/Seoul
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+  REDIS_URL: redis://redis:6379/0
+
+# 앱 헬스체크 주기 (backend · frontend 공통)
+x-app-healthcheck: &app-healthcheck
+  interval: 15s
+  timeout: 5s
+  retries: 10
 
 networks:
   data:
@@ -34,8 +52,9 @@ networks:
   edge: {}
 
 services:
+  # ---- 데이터 저장소 ----------------------------------------------------------
   db:
-    image: postgis/postgis:17-3.5
+    image: postgis/postgis:17-3.5          # PostgreSQL 17 + PostGIS 3.5
     restart: unless-stopped
     environment:
       TZ: Asia/Seoul
@@ -49,7 +68,9 @@ services:
       - no-new-privileges:true
     deploy:
       resources:
-        limits: {cpus: "1.0", memory: 1g}
+        limits:
+          cpus: "1.0"
+          memory: 1g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -57,7 +78,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:7.4-alpine
+    image: redis:7.4-alpine                # 분산 락 · GPS 스트림 · Celery 브로커
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]   # Streams · 락 데이터 디스크 보존
     environment:
@@ -69,93 +90,83 @@ services:
       - no-new-privileges:true
     deploy:
       resources:
-        limits: {cpus: "0.5", memory: 512m}
+        limits:
+          cpus: "0.5"
+          memory: 512m
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 30
 
+  # ---- 앱 ---------------------------------------------------------------------
   backend:
-    <<: *app-security
-    build: .
-    restart: unless-stopped
+    <<: *app
+    build: .                 # 앱 이미지 빌드는 여기서만
+    command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers
+    env_file: .env
+    environment: *app-env
+    volumes:
+      - pod_photos:/app/backend/data/pod_photos   # 인수증 사진
+    ports:
+      - "8000:8000"
     networks: [data, edge]   # DB · Redis(data) 와 화면 · 외부(edge) 사이 중계 · 국세청 · Gemini 호출은 edge 로
     deploy:
       resources:
-        limits: {cpus: "2.0", memory: 2g}
-    command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers
-    env_file: .env
-    environment:
-      TZ: Asia/Seoul
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
-    volumes:
-      - pod_photos:/app/backend/data/pod_photos
-    ports:
-      - "8000:8000"
+        limits:
+          cpus: "2.0"
+          memory: 2g
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
+      <<: *app-healthcheck
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).status == 200 else 1)"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
       start_period: 30s
 
   worker:
-    <<: *app-security
-    build: .
-    restart: unless-stopped
+    # Celery 워커: 3D 빈패킹 등 무거운 계산 (브로커 · 결과 = Redis)
+    <<: *app
+    command: celery -A backend.workers.celery_app worker -l info --concurrency 2 -n packer@%h
+    env_file: .env
+    environment: *app-env
     networks: [data]          # Redis 만 쓰면 되므로 외부와 단절
     deploy:
       resources:
-        limits: {cpus: "2.0", memory: 2g}
-    command: celery -A backend.workers.celery_app worker -l info --concurrency 2 -n packer@%h
-    env_file: .env
-    environment:
-      TZ: Asia/Seoul
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      REDIS_URL: redis://redis:6379/0
+        limits:
+          cpus: "2.0"
+          memory: 2g
     depends_on:
       redis:
         condition: service_healthy
 
   frontend:
-    <<: *app-security
-    build: .
-    restart: unless-stopped
-    networks: [edge]          # backend API 만 호출 · DB · Redis 에는 닿을 수 없음
-    deploy:
-      resources:
-        limits: {cpus: "1.0", memory: 1g}
+    <<: *app
     command: python -m streamlit run frontend/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
     environment:
       TZ: Asia/Seoul
       BAECHA_API_BASE: http://backend:8000/api/v1
     ports:
       - "8501:8501"
+    networks: [edge]          # backend API 만 호출 · DB · Redis 에는 닿을 수 없음
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
+      <<: *app-healthcheck
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3).status == 200 else 1)"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
 
   simulator:
-    <<: *app-security
-    build: .
+    # 가상 기사 GPS 시뮬레이터 — 프로필 'sim' 일 때만 실행
+    <<: *app
     profiles: ["sim"]
-    restart: unless-stopped
-    networks: [edge]
-    deploy:
-      resources:
-        limits: {cpus: "0.5", memory: 256m}
     command: python -m simulator.virtual_driver
     environment:
       TZ: Asia/Seoul
@@ -163,11 +174,17 @@ services:
       SIM_API_KEY: ${SIM_API_KEY}
       TIME_SCALE: ${TIME_SCALE:-20}
       SIM_DEVIATION_EVERY: ${SIM_DEVIATION_EVERY:-240}
+    networks: [edge]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
     depends_on:
       backend:
         condition: service_healthy
 
 volumes:
-  pg_data:
+  pg_data:         # 이름 유지: 바꾸면 기존 운영 DB 가 빈 DB 처럼 보인다
   redis_data:
   pod_photos:

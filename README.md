@@ -28,7 +28,7 @@ docker compose up --build -d    # db · redis · backend · worker · simulator 
 | http://localhost:8000/m/ | 차주용 휴대폰 3D 적재 가이드 (휴대폰: `http://<PC IP>:8000/m/`) |
 
 데모 계정 (비밀번호 `baecha1234`): 화주 `logistics@samsung.com` · 차주 `driver.kim@baecha.co.kr` · 관제 `admin.control@baecha.co.kr`
-VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **실행방법.txt** 를 보세요.
+VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/실행방법.md](docs/실행방법.md)** 를 보세요.
 
 ---
 
@@ -62,7 +62,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **실행�
 청구  UNBILLED → REQUESTED → PAID → REFUNDED → (재청구) REQUESTED
 ```
 
-### 명세 Phase 0~8 대응 (4차 · 자세한 비교는 상위 폴더 `명세_비교_정리.md`)
+### 명세 Phase 0~8 대응 (4차 · 자세한 비교는 [docs/명세_비교_정리.md](docs/명세_비교_정리.md))
 | Phase | 내용 | 주요 파일 |
 |---|---|---|
 | 0 | 사업자 Mod-10 · 국세청 API(선택) · 노란 번호판 · 필수 서류 3종 · prod compose | `engines/compliance_engine.py`, `docker-compose.prod.yml` |
@@ -85,7 +85,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **실행�
 ├── docker-compose.yml         # db · redis · backend · worker · simulator · frontend
 ├── docker-compose.prod.yml    # 운영용 (포트 비공개 · 자동 재시작 · 헬스체크 · 시뮬레이터는 --profile sim)
 ├── Dockerfile                 # 백엔드/워커/화면 공용 이미지 (Python 3.14)
-├── requirements.txt           # FastAPI · Streamlit · SQLAlchemy · PostGIS · Redis · Celery · LightGBM · py3dbp …
+├── requirements.txt           # FastAPI · Streamlit · SQLAlchemy · PostGIS · Redis · Celery · LightGBM …
 ├── backend/
 │   ├── main.py                # 앱 진입점 (CORS · 요청 후 DB 저장 · GPS 워커 시작 · /m 모바일 웹)
 │   ├── config.py              # pydantic-settings (.env)
@@ -94,7 +94,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **실행�
 │   ├── schemas/               # auth · order · settlement · matching(핑 · 메트릭스) · review
 │   ├── services/              # auth · order · matching · billing(AI 운임 · 수급 · MockPG) · tracking · review
 │   ├── engines/
-│   │   ├── packer/            # 3D 빈패킹 (EP 휴리스틱 · py3dbp_engine.py · 기하 검증)
+│   │   ├── packer/            # 3D 적재: rules.py(적재 규칙 R0~R10) · engine.py(규칙 + EP) · validate.py(규칙 재채점)
 │   │   ├── matcher/           # spatial.py(PostGIS) · cf_score.py · ml_ranker.py(LightGBM) · hungarian.py
 │   │   ├── compliance_engine.py · validation_engine.py · pricing_engine.py · tracking_engine.py
 │   │   ├── fsm/order_fsm.py   # 상태 전이 · 감사 로그 해시 체인
@@ -109,7 +109,8 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **실행�
 │   └── static/style.css       # 전역 스타일
 ├── mobile_web/                # index.html · js/load_visualizer.js · css/mobile_style.css (Three.js r147 CDN)
 ├── simulator/                 # virtual_driver.py(GPS) · virtual_shipper.py(가상 주문 · 부하 테스트)
-├── docs/                      # 벤치마킹_보고서.md · benchmark_metrics.json · 법적_준비_초안.md
+├── docs/                      # 실행방법 · 기능명세서 · 컬럼명_리스트 · 명세_비교_정리 · 벤치마킹_보고서 · 법적_준비_초안 · 브랜치_전략
+│   └── internal/              # 발표자료 · 변경점 정리 (git 제외 · 내부용)
 └── tests/                     # test_suites.py(pytest) · test_packing · test_matching · test_fsm · test_compliance ·
                                # test_pricing · test_tracking · stress_test · smoke_test
 ```

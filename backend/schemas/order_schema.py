@@ -44,7 +44,7 @@ class PackPlanIn(BaseModel):
     truck_type: str | None = None  # None = 자동 추천
     cold_chain: bool = False
     options: PackOptionsIn = PackOptionsIn()
-    compare_baseline: bool = False
+    compare_baseline: bool = False  # 폐지 (py3dbp 비교 제거) · 예전 클라이언트 호환용으로 받기만 하고 무시
 
     def item_specs(self):
         return _specs(self.items)

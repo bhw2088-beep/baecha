@@ -75,7 +75,7 @@ def _login_form(meta):
                 _login(email, password)
 
     st.html('<div class="ct" style="margin:18px 0 6px"><div class="ct-sec"><b>데모 계정으로 바로 체험</b>'
-            f'<span>비밀번호 {DEMO_PASSWORD}</span></div></div>')
+            '<span>[접속]을 누르면 바로 로그인</span></div></div>')
     demos = (meta or {}).get("demo_accounts", [])
     cols = st.columns(3)
     for col, acc in zip(cols, demos):
