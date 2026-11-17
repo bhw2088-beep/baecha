@@ -4,7 +4,7 @@
 #   점검:  docker compose -f docker-compose.prod.yml ps
 #
 # 개발용(docker-compose.yml)과 다른 점
-#   - DB · Redis 포트를 밖으로 열지 않음 (컨테이너 네트워크 안에서만 접속)
+#   - DB · Redis 포트를 밖으로 열지 않음 (내부 전용 data 망 안에서만 접속)
 #   - 모든 서비스 restart: unless-stopped (재부팅 · 장애 후 자동 재시작)
 #   - 백엔드 · 프론트엔드 헬스체크 → 준비된 뒤에 다음 서비스 시작
 #   - 백엔드는 워커 1개로 실행: 저장소가 '메모리 작업본 + PostgreSQL write-behind' 구조라 한 프로세스만 써야 한다
@@ -12,8 +12,26 @@
 #   - 가상 GPS 시뮬레이터는 프로필 'sim' 일 때만:  ... --profile sim up -d
 #   - 무중단 배포: 이미지만 새로 빌드한 뒤  up -d --no-deps frontend  처럼 서비스별로 교체
 #     (backend 는 1개 프로세스라 교체 순간 몇 초 끊김 — 앞단에 프록시 · 재시도 권장)
+#
+# 보안
+#   - 네트워크 분리: data(내부 전용, 인터넷 · 외부 접속 불가) = db · redis · backend · worker
+#                    edge(외부 공개)                       = backend · frontend · simulator
+#     → DB · Redis 는 data 망에만 있어 웹 화면 · 외부에서 직접 닿을 수 없다. backend 만 두 망에 걸쳐 중계.
+#   - 앱 컨테이너: root 아닌 appuser 실행(Dockerfile) · 리눅스 권한(capability) 전부 제거 · 권한 상승 금지
+#   - 서비스별 CPU · 메모리 상한 (한 서비스 폭주가 서버 전체를 멈추지 않게)
 # .env 의 POSTGRES_PASSWORD · SIM_API_KEY · ADMIN_APPROVAL_CODE 는 반드시 운영용 값으로 바꿀 것.
 name: baecha-prod
+
+x-app-security: &app-security
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+networks:
+  data:
+    internal: true      # 바깥(인터넷 · 호스트 포트)과 연결되지 않는 내부 전용 망
+  edge: {}
 
 services:
   db:
@@ -26,6 +44,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pg_data:/var/lib/postgresql/data
+    networks: [data]
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1g}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -40,6 +64,12 @@ services:
       TZ: Asia/Seoul
     volumes:
       - redis_data:/data
+    networks: [data]
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 512m}
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -47,8 +77,13 @@ services:
       retries: 30
 
   backend:
+    <<: *app-security
     build: .
     restart: unless-stopped
+    networks: [data, edge]   # DB · Redis(data) 와 화면 · 외부(edge) 사이 중계 · 국세청 · Gemini 호출은 edge 로
+    deploy:
+      resources:
+        limits: {cpus: "2.0", memory: 2g}
     command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers
     env_file: .env
     environment:
@@ -72,8 +107,13 @@ services:
       start_period: 30s
 
   worker:
+    <<: *app-security
     build: .
     restart: unless-stopped
+    networks: [data]          # Redis 만 쓰면 되므로 외부와 단절
+    deploy:
+      resources:
+        limits: {cpus: "2.0", memory: 2g}
     command: celery -A backend.workers.celery_app worker -l info --concurrency 2 -n packer@%h
     env_file: .env
     environment:
@@ -85,8 +125,13 @@ services:
         condition: service_healthy
 
   frontend:
+    <<: *app-security
     build: .
     restart: unless-stopped
+    networks: [edge]          # backend API 만 호출 · DB · Redis 에는 닿을 수 없음
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 1g}
     command: python -m streamlit run frontend/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
     environment:
       TZ: Asia/Seoul
@@ -103,9 +148,14 @@ services:
       retries: 10
 
   simulator:
+    <<: *app-security
     build: .
     profiles: ["sim"]
     restart: unless-stopped
+    networks: [edge]
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256m}
     command: python -m simulator.virtual_driver
     environment:
       TZ: Asia/Seoul

@@ -1,11 +1,36 @@
-# 이미지에 넣지 않을 것
+# 이미지에 넣지 않을 것 (비밀값 · 개발 도구 · 문서 · 캐시)
+
+# 비밀값 — .env 와 그 변형(.env.local 등)은 절대 이미지에 넣지 않는다 (실행 시 env_file 로만 주입)
+.env
+.env.*
+
+# 버전 관리 · CI · 에디터
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# 가상환경 · 캐시
 .venv*/
 **/__pycache__/
 **/*.pyc
-.git/
-*.md
-Dockerfile
-docker-compose.yml
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+
+# 도커 · 실행 설정 (이미지 안에서는 쓰지 않음)
+Dockerfile*
+docker-compose*.yml
 .dockerignore
-.env
+
+# 문서 · 보고서 · 산출물 (서버 실행에 필요 없음)
+*.md
+docs/
+*.zip
+기능명세서.txt
+컬럼명_리스트.txt
+실행방법.txt
+
+# 운영 데이터 (볼륨으로만 보관)
 backend/data/pod_photos/

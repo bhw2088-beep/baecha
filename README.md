@@ -122,6 +122,18 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **실행�
 | 차주 | 배차 제안 · AI 추천 리스트 · 내 운행(평점 · 번호판 · 제한 상태) / 수익 · 화주 청구 · 화주 평가 / 휴대폰 3D 적재 가이드(과적 · 편심 경고) |
 | 관제 | 전국 관제 지도(AI 명령창 · 브리핑 · 실시간 추적 · 권역 수급) / 매칭 분석(엔진 · 성능 로그 · 조절 가이드) / 이상 감지(AI 인시던트 리포트) / 컴플라이언스(가입 심사 · 리뷰/블랙리스트 · 해시 체인 감사 로그 · 결제 취소) / 데모 데이터 초기화 |
 
+## 보안 설정
+| 항목 | 개발용 `docker-compose.yml` | 운영용 `docker-compose.prod.yml` |
+|---|---|---|
+| 실행 계정 | root 아닌 `appuser`(UID 10001) · 코드는 읽기 전용 | 같음 + 리눅스 권한(capability) 전부 제거 |
+| DB · Redis | `127.0.0.1` 에만 열림 (이 PC 의 DB 도구만 접속) | 포트 없음 · 내부 전용 `data` 망 |
+| 네트워크 | 기본 망 | `data`(내부 전용: db · redis · backend · worker) / `edge`(backend · frontend · simulator) |
+| 자원 | 제한 없음 | 서비스별 CPU · 메모리 상한 |
+| 기타 | `no-new-privileges` · 재부팅 후 자동 재시작 | 같음 |
+| 이미지 | `.dockerignore` 로 `.env*` · 문서 · CI · 캐시 제외 | 같음 |
+
+남은 권장 사항: 인터넷에 공개하기 전 데모 비밀번호 · `ADMIN_APPROVAL_CODE` · `SIM_API_KEY` 교체, HTTPS 프록시, Redis 비밀번호.
+
 ## 브랜치 전략
 `main`(운영) ← `staging`(통합 검증 · 시연) ← `feature/*` · `fix/*` (Pull Request + CI 통과 후 머지), 긴급은 `hotfix/*`.
 CI 는 `main` · `staging` push 와 모든 PR 에서 실행. 자세한 규칙 · 배포 순서는 **docs/브랜치_전략.md**.
