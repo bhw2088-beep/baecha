@@ -29,6 +29,7 @@ docker compose up --build -d    # db · redis · backend · worker · simulator 
 
 데모 계정 (비밀번호 `baecha1234`): 화주 `logistics@samsung.com` · 차주 `driver.kim@baecha.co.kr` · 관제 `admin.control@baecha.co.kr`
 VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/실행방법.md](docs/실행방법.md)** 를 보세요.
+적재 · 매칭 · 관제 핵심 코드와 측정값은 **[docs/주요코드_설명.md](docs/주요코드_설명.md)** 에 정리했습니다.
 
 ---
 
@@ -109,7 +110,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 │   └── static/style.css       # 전역 스타일
 ├── mobile_web/                # index.html · js/load_visualizer.js · css/mobile_style.css (Three.js r147 CDN)
 ├── simulator/                 # virtual_driver.py(GPS) · virtual_shipper.py(가상 주문 · 부하 테스트)
-├── docs/                      # 실행방법 · 기능명세서 · 컬럼명_리스트 · 명세_비교_정리 · 벤치마킹_보고서 · 법적_준비_초안 · 브랜치_전략
+├── docs/                      # 주요코드_설명 · 실행방법 · 기능명세서 · 컬럼명_리스트 · 명세_비교_정리 · 벤치마킹_보고서 · 법적_준비_초안 · 브랜치_전략
 │   └── internal/              # 발표자료 · 변경점 정리 (git 제외 · 내부용)
 └── tests/                     # test_suites.py(pytest) · test_packing · test_matching · test_fsm · test_compliance ·
                                # test_pricing · test_tracking · stress_test · smoke_test
