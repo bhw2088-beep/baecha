@@ -206,6 +206,28 @@ def _decode_polyline(s: str, precision: int = 5) -> list[tuple[float, float]]:
     return coords
 
 
+def encode_polyline(points: list[tuple[float, float]], precision: int = 5) -> str:
+    """[(lat, lon), ...] → Google/OSRM encoded polyline (화물 planned_polyline 저장용, 1/10만 도 ≈ 1m 정밀도)."""
+    factor, out, prev_lat, prev_lon = 10 ** precision, [], 0, 0
+    for lat, lon in points:
+        ilat, ilon = round(lat * factor), round(lon * factor)
+        for delta in (ilat - prev_lat, ilon - prev_lon):
+            v = ~(delta << 1) if delta < 0 else delta << 1
+            while v >= 0x20:
+                out.append(chr((0x20 | (v & 0x1F)) + 63))
+                v >>= 5
+            out.append(chr(v + 63))
+        prev_lat, prev_lon = ilat, ilon
+    return "".join(out)
+
+
+def decode_polyline(s: str) -> list[tuple[float, float]]:
+    """저장된 planned_polyline → [(lat, lon), ...] (같은 문자열은 한 번만 풀어 둔다)."""
+    if s not in _decoded:
+        _decoded[s] = _decode_polyline(s)
+    return _decoded[s]
+
+
 def _cached(a: tuple[float, float], b: tuple[float, float]) -> tuple[dict | None, bool]:
     _maybe_reload()
     ka, kb = coord_key(a), coord_key(b)

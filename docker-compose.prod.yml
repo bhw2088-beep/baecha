@@ -55,6 +55,8 @@ services:
       TZ: Asia/Seoul
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - pod_photos:/app/backend/data/pod_photos
     ports:
       - "8000:8000"
     depends_on:
@@ -118,3 +120,4 @@ services:
 volumes:
   pg_data:
   redis_data:
+  pod_photos:

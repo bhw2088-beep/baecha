@@ -8,6 +8,7 @@
 """
 
 import hashlib
+from datetime import datetime, time, timedelta
 import json
 import math
 
@@ -151,7 +152,8 @@ def render_order_detail(o: dict, show_map: bool = True):
     d = o["driver"]
     top = (f'<div class="ct-row"><span class="ct-mono">{o["id"]}</span>{ui.status_pill(o)}</div>'
            f'<div class="ct-big" style="margin-top:6px">{o["title"]}</div>'
-           f'<div class="ct-muted">{o["truck_type"]} · {o["distance_km"]:.0f}km · 운임 {ui.won(o["fare"])}</div>')
+           f'<div class="ct-muted">{o["truck_type"]} · {o["distance_km"]:.0f}km · 운임 {ui.won(o["fare"])}'
+           + (f' · 예약 상차 {ui.dt_text(o["pickup_at"], "%m.%d %H:%M")}' if o.get("pickup_at") else "") + '</div>')
     if o.get("packing"):
         pk = o["packing"]
         top += (f'<div class="ct-muted" style="margin-top:2px">적재 계획 · 상자 {pk["placed"]}개 · '
@@ -379,14 +381,25 @@ def pod_dialog(i: dict):
             f'<div style="margin-top:14px;padding:14px;border:1px dashed var(--line);border-radius:10px;text-align:center">'
             f'<div class="ct-muted">인수자 확인 및 전자서명</div>'
             f'<div style="font-size:24px;font-weight:800;margin-top:4px;font-style:italic">{pod["receiver"]} (인)</div></div></div>')
+    ph = pod.get("photo") or {}
+    if ph.get("sha256"):
+        st.caption(f"인수증 사진 SHA-256 {ph['sha256'][:16]}… · {ph.get('filename') or '-'}"
+                   + (" (시드 데이터 · 사진 파일 없음)" if ph.get("seed") else ""))
+        if not ph.get("seed"):
+            try:
+                st.image(api.get_bytes(f"/orders/{i['id']}/pod/photo"), caption="인수증 사진", width="stretch")
+            except api.ApiError as e:
+                st.caption(str(e))
+    elif ph.get("legacy"):
+        st.caption("사진 인증 도입 전에 발급된 인수증입니다.")
 
 
 # ================================================================== 신규 화물 등록 + 3D 적재 시뮬레이션
 
 COLS = {  # 화면 컬럼명 → API 필드
     "품목": "name", "길이(mm)": "length", "폭(mm)": "width", "높이(mm)": "height", "무게(kg)": "weight",
-    "수량": "qty", "세움 고정": "upright", "적층 불가": "fragile", "상부 허용하중(kg)": "max_top_load",
-    "하차 순서": "drop",
+    "수량": "qty", "세움 고정": "upright", "적층 불가": "stackable", "파손주의": "fragile", "냉동": "frozen",
+    "상부 허용하중(kg)": "max_top_load", "하차 순서": "drop",
 }
 MERIT = {"wall": "벽 쌓기 (운전석→뒷문)", "floor": "바닥 우선 (낮게)"}
 SORT = {"area_height": "면적-높이 군집 (Crainic)", "volume": "부피 내림차순", "weight": "무게 내림차순"}
@@ -412,6 +425,7 @@ def _items_df(items: list[dict]) -> pd.DataFrame:
     return pd.DataFrame([{
         "품목": i["name"], "길이(mm)": i["length"], "폭(mm)": i["width"], "높이(mm)": i["height"],
         "무게(kg)": float(i["weight"]), "수량": i["qty"], "세움 고정": i["upright"], "적층 불가": not i["stackable"],
+        "파손주의": bool(i.get("fragile")), "냉동": bool(i.get("frozen")),
         "상부 허용하중(kg)": i["max_top_load"], "하차 순서": i["drop"],
     } for i in items], columns=list(COLS))
 
@@ -420,7 +434,7 @@ def _df_to_items(df: pd.DataFrame) -> tuple[list[dict], list[str]]:
     items, errors = [], []
     for n, row in enumerate(df.to_dict("records"), start=1):
         if all((v is None or (isinstance(v, float) and math.isnan(v)) or v == "") for k, v in row.items()
-               if k not in ("세움 고정", "적층 불가")):
+               if k not in ("세움 고정", "적층 불가", "파손주의", "냉동")):
             continue  # 빈 줄
         missing = [k for k in ("품목", "길이(mm)", "폭(mm)", "높이(mm)", "무게(kg)", "수량")
                    if row.get(k) is None or (isinstance(row[k], float) and math.isnan(row[k])) or row[k] == ""]
@@ -434,6 +448,7 @@ def _df_to_items(df: pd.DataFrame) -> tuple[list[dict], list[str]]:
             "name": str(row["품목"]), "length": int(row["길이(mm)"]), "width": int(row["폭(mm)"]),
             "height": int(row["높이(mm)"]), "weight": float(row["무게(kg)"]), "qty": int(row["수량"]),
             "upright": bool(row.get("세움 고정")), "stackable": not bool(row.get("적층 불가")),
+            "fragile": bool(row.get("파손주의")), "frozen": bool(row.get("냉동")),
             "max_top_load": cap, "drop": 1 if drop is None or (isinstance(drop, float) and math.isnan(drop)) else int(drop),
         })
     return items, errors
@@ -493,7 +508,9 @@ def new_order_page():
                 "무게(kg)": st.column_config.NumberColumn(min_value=0.1, max_value=25000, step=0.5, format="%.1f", width=78),
                 "수량": st.column_config.NumberColumn(min_value=1, max_value=300, step=1, format="%d", width=55),
                 "세움 고정": st.column_config.CheckboxColumn(width=70, help="This side up — 눕히거나 뒤집지 않고 수직축 회전만 허용"),
-                "적층 불가": st.column_config.CheckboxColumn(width=70, help="파손주의 — 이 품목 위에는 아무것도 올리지 않음"),
+                "적층 불가": st.column_config.CheckboxColumn(width=70, help="이 품목 위에는 아무것도 올리지 않음"),
+                "파손주의": st.column_config.CheckboxColumn(width=70, help="파손주의 — 최상단에만 배치 (위 적재 금지)"),
+                "냉동": st.column_config.CheckboxColumn(width=55, help="냉동 화물 — 최상단에만 배치 (냉기 순환 · 결로 방지)"),
                 "상부 허용하중(kg)": st.column_config.NumberColumn(min_value=0, step=10, format="%d", width=110,
                                                             help="이 품목 위에 쌓일 수 있는 총 무게. 비우면 제한 없음"),
                 "하차 순서": st.column_config.NumberColumn(min_value=1, max_value=9, step=1, format="%d", width=70,
@@ -735,18 +752,33 @@ def _register_section(plan, stale, title, origin, destination, cold, temp_set, w
                        f"상차지에서 가깝고 적재함을 잘 채우는 기사({formula})에게 자동으로 배차를 제안합니다.")
         truck_type = res["truck"]["name"] if res else None
         weight = res["metrics"]["loaded_weight"] if res else None
+        max_item = max((i["length"] for i in plan["req"]["items"]), default=None) if plan else None
+
+        # 예약 배차: 상차 시각을 정하면 그 시간대의 예상 날씨 · 수급으로 할증, 24시간 전 예약은 5% 할인
+        r1, r2, r3 = st.columns([1, 1, 1], vertical_alignment="bottom")
+        reserve = r1.toggle("예약 배차 (상차 시각 지정)", key="no_reserve")
+        today = datetime.now()
+        pick_date = r2.date_input("상차 날짜", value=today.date() + timedelta(days=1), min_value=today.date(),
+                                  disabled=not reserve, key="no_pick_date")
+        pick_time = r3.time_input("상차 시각", value=time(9, 0), step=1800, disabled=not reserve, key="no_pick_time")
+        pickup_at = datetime.combine(pick_date, pick_time) if reserve else None
+        if pickup_at and pickup_at <= today:
+            st.warning("예약 시각이 이미 지났습니다. 즉시 배차로 계산합니다.")
+            pickup_at = None
 
         # AI 적정 운임: 차종 · 상하차지 · 중량 · 조건이 정해지면 자동으로 계산 (바뀔 때만 다시 요청)
         est = None
         if ok_plan and origin and destination:
-            key = _hash([truck_type, origin, destination, urgent, cold, int(wait), weight])
+            key = _hash([truck_type, origin, destination, urgent, cold, int(wait), weight, max_item,
+                         pickup_at.isoformat() if pickup_at else None])
             cache = st.session_state.get("no_est_cache")
             if cache and cache["key"] == key:
                 est = cache["est"]
             else:
                 est = ui.act(api.post, "/pricing/estimate", {
                     "truck_type": truck_type, "origin": origin, "destination": destination, "urgent": urgent,
-                    "cold_chain": cold, "wait_minutes": int(wait), "weight_kg": weight})
+                    "cold_chain": cold, "wait_minutes": int(wait), "weight_kg": weight, "max_item_mm": max_item,
+                    "pickup_at": pickup_at.isoformat() if pickup_at else None})
                 if est:
                     st.session_state.no_est_cache = {"key": key, "est": est}
                     st.session_state.no_price = est["recommended"]  # 조건이 바뀌면 추천가로 다시 맞춤
@@ -779,6 +811,7 @@ def _register_section(plan, stale, title, origin, destination, cold, temp_set, w
                 "title": title, "truck_type": truck_type, "origin": origin, "destination": destination,
                 "price": int(price), "urgent": urgent, "cold_chain": cold,
                 "temp_set": float(temp_set) if cold else None,
+                "pickup_at": pickup_at.isoformat() if pickup_at else None,
                 "items": req["items"], "packing_options": req["options"],
             })
             if created:

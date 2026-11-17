@@ -35,8 +35,10 @@ def page():
         {"label": "결제 승인 (모의 PG)", "value": ui.won(sum(p["amount"] for p in payments if p["status"] == "APPROVED")),
          "note": f"취소 {sum(1 for p in payments if p['status'] == 'CANCELLED')}건"},
     ])
-    t1, t4, t2, t3 = st.tabs([f"차주 가입 승인 · {len(pending)}", f"리뷰 · 블랙리스트 · {len(blocked)}",
-                              "감사 로그 (해시 체인)", "결제 내역 · 취소 (모의 PG)"])
+    po = ui.load(api.get, "/admin/payouts")
+    t1, t4, t2, t3, t5 = st.tabs([f"차주 가입 승인 · {len(pending)}", f"리뷰 · 블랙리스트 · {len(blocked)}",
+                                  "감사 로그 (해시 체인)", "결제 내역 · 취소 (모의 PG)",
+                                  f"기사 수익금 송금 · {len(po['pending'])}"])
     with t1:
         _drivers_tab(drivers)
     with t4:
@@ -45,6 +47,42 @@ def page():
         _audit_tab(audit)
     with t3:
         _payments_tab(payments)
+    with t5:
+        _payouts_tab(po)
+
+
+# ------------------------------------------------------------------ 기사 수익금 일괄 송금
+def _payouts_tab(po: dict):
+    st.caption(f"화주 결제(모의 PG)가 끝난 운송비를 기사별로 묶어 한 번에 송금합니다. 플랫폼 수수료 {po['fee_rate']:.0%} 를 뺀 금액이 "
+               "송금되며, 모의 이체라 실제 출금은 없습니다. 송금된 건은 결제 취소(환불)를 할 수 없습니다.")
+    pend = po["pending"]
+    if pend:
+        ui.kpis([
+            {"label": "송금 대기 기사", "value": len(pend), "unit": "명"},
+            {"label": "송금 대기 건", "value": sum(r["count"] for r in pend), "unit": "건"},
+            {"label": "결제 합계", "value": ui.won(sum(r["gross"] for r in pend))},
+            {"label": "송금 예정액", "value": ui.won(sum(r["net"] for r in pend)),
+             "note": f"수수료 {ui.won(sum(r['fee'] for r in pend))}"},
+        ])
+        st.dataframe(pd.DataFrame([{
+            "기사": f"{r['driver']} ({r['driver_id']})", "차량": r["plate"], "건수": r["count"],
+            "결제 합계": r["gross"], "수수료": r["fee"], "송금액": r["net"], "화물": ", ".join(r["orders"]),
+        } for r in pend]), hide_index=True, width="stretch", column_config={
+            k: st.column_config.NumberColumn(format="%,d원") for k in ("결제 합계", "수수료", "송금액")})
+        if st.button(f"{len(pend)}명에게 일괄 송금 (모의)", type="primary", icon=":material/payments:"):
+            if ui.act(api.post, "/admin/payouts/run", json={"driver_ids": []},
+                      success=f"{len(pend)}명에게 {ui.won(sum(r['net'] for r in pend))} 송금했습니다 (모의 이체)."):
+                st.rerun()
+    else:
+        st.info("송금할 금액이 없습니다. 화주가 청구서를 승인(결제)하면 여기에 쌓입니다.", icon=":material/payments:")
+    ui.section("송금 내역", f"{len(po['history'])}건")
+    if po["history"]:
+        st.dataframe(pd.DataFrame([{
+            "송금 번호": h["id"], "일시": ui.dt_text(h["at"], "%m.%d %H:%M"), "기사": h["driver"], "건수": h["count"],
+            "결제 합계": h["gross"], "수수료": h["fee"], "송금액": h["net"], "계좌": h["bank"], "거래번호": h["tid"],
+            "처리": h["by"],
+        } for h in po["history"]]), hide_index=True, width="stretch", column_config={
+            k: st.column_config.NumberColumn(format="%,d원") for k in ("결제 합계", "수수료", "송금액")})
 
 
 # ------------------------------------------------------------------ 가입 승인

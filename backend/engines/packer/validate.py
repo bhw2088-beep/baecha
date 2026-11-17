@@ -101,6 +101,28 @@ def validate(container: Container, rows: list[dict], *, min_support: float, lifo
         f"최대 하중 사용률 {worst:.0%}" if worst else "하중 제한 품목 위 적재 없음",
         f"{len(bad)}개 상자가 허용하중 초과/파손주의 위 적재")
 
+    # C6b 파손주의 · 냉동 화물 최상단 배치 강제 — 표시된 상자 위(바닥 면적이 겹치는 더 높은 곳)에 다른 상자가 있으면 위반
+    tops = [i for i, r in enumerate(rows) if r.get("fragile") or r.get("frozen")]
+    bad = []
+    for i in tops:
+        a = box[i]
+        for j in range(n):
+            if j == i:
+                continue
+            b = box[j]
+            if (b[4] >= a[5] - EPS and _overlap_1d(a[0], a[1], b[0], b[1]) > EPS
+                    and _overlap_1d(a[2], a[3], b[2], b[3]) > EPS):
+                bad.append(ids[i])
+                break
+    kinds = []
+    if any(rows[i].get("fragile") for i in tops):
+        kinds.append(f"파손주의 {sum(1 for i in tops if rows[i].get('fragile'))}개")
+    if any(rows[i].get("frozen") for i in tops):
+        kinds.append(f"냉동 {sum(1 for i in tops if rows[i].get('frozen'))}개")
+    add("top_only", "최상단 배치 (파손주의 · 냉동)", "파손주의 · 냉동 표시 상자 위에는 아무것도 싣지 않음", bad,
+        (" · ".join(kinds) + " 모두 최상단") if tops else "해당 품목 없음",
+        f"{len(set(bad))}개 상자 위에 다른 화물이 실림")
+
     # C7 하차 순서
     bad = []
     if lifo:

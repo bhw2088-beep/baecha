@@ -11,7 +11,7 @@ from ...core.database import store
 from ...core.errors import ApiError
 from ...core.security import current_user, require
 from ...engines.matcher import spatial as geo
-from ...schemas.settlement_schema import EstimateIn, InvoiceIn, PaymentIn, RefundIn
+from ...schemas.settlement_schema import EstimateIn, InvoiceIn, PaymentIn, PayoutIn, RefundIn
 from ...services import billing_service as pricing
 
 router = APIRouter(tags=["settlement"])
@@ -29,7 +29,8 @@ async def estimate(body: EstimateIn, _: dict = Depends(current_user)):
     from ...engines.pricing_engine import region_of
     return pricing.estimate(body.truck_type, body.origin, body.destination,
                             cold_chain=cold, urgent=body.urgent, wait_minutes=body.wait_minutes,
-                            weight_kg=body.weight_kg, market=store.market_status(region_of(body.origin)))
+                            weight_kg=body.weight_kg, market=store.market_status(region_of(body.origin)),
+                            max_item_mm=body.max_item_mm, pickup_at=body.pickup_at)
 
 
 @router.get("/pricing/market")
@@ -56,6 +57,7 @@ async def export_history(q: str = "", status: str = "ALL", period: str = "ALL", 
         "상차 거리(km)": i["match"]["pickup_km"] if i["match"] else "",
         "부피 적재율(%)": round(i["match"]["volume_util"] * 100, 1) if i["match"] and i["match"]["volume_util"] else "",
         "인수증 해시": i["pod"]["hash"] if i["pod"] else "",
+        "인수증 사진 SHA-256": ((i["pod"] or {}).get("photo") or {}).get("sha256") or "",
     } for i in items])
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -87,6 +89,19 @@ async def payments():
     return store.payments()
 
 
+@router.get("/admin/payouts", dependencies=[Admin])
+async def payouts():
+    """기사 수익금 송금 대기(기사별 결제 합계 · 수수료 · 송금액) + 송금 내역."""
+    from ...services.billing_service import PLATFORM_FEE_RATE
+    return {"pending": store.payable_summary(), "history": store.payout_history(), "fee_rate": PLATFORM_FEE_RATE}
+
+
+@router.post("/admin/payouts/run")
+async def run_payouts(body: PayoutIn | None = None, user: dict = Admin):
+    """일괄 송금 (모의 이체). driver_ids 를 비우면 송금 대기 기사 전체."""
+    return store.run_payouts(by=user["name"], driver_ids=(body.driver_ids if body else None) or None)
+
+
 @router.post("/admin/payments/{order_id}/refund", dependencies=[Admin])
 async def refund(order_id: str, body: RefundIn):
     """결제 취소(모의 PG) → 청구 REFUNDED · 화물 DELIVERED → 차주가 다시 청구할 수 있음."""
@@ -94,6 +109,13 @@ async def refund(order_id: str, body: RefundIn):
 
 
 # ------------------------------------------------------------------ 차주
+@router.get("/driver/payouts")
+async def driver_payouts(user: dict = Driver):
+    """내 수익금 송금 내역 · 송금 대기 금액."""
+    pend = next((r for r in store.payable_summary() if r["driver_id"] == user["org_id"]), None)
+    return {"pending": pend, "history": store.payout_history(user["org_id"])}
+
+
 @router.get("/driver/completed")
 async def driver_completed(user: dict = Driver):
     return store.driver_completed(user["org_id"])

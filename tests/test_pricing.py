@@ -80,6 +80,50 @@ far = dict(feat, pickup_km=55, cf_score=0.2, rating=2.5, rush_hour=1, fare_gap=-
 check("모의 스코어러 0~1", all(0 <= ml_ranker.mock_lgb_score(x) <= 1 for x in (feat, far)))
 check("가깝고 평점 좋으면 0.75 이상", ml_ranker.predict([feat])[0] >= 0.75, f"{ml_ranker.predict([feat])[0]:.3f}")
 check("멀고 평점 낮고 러시아워면 0.75 미만", ml_ranker.predict([far])[0] < 0.75, f"{ml_ranker.predict([far])[0]:.3f}")
-check("모델 피처 10개 (cf_score · rating · rush_hour 포함)", ml_ranker.info().get("features") == ml_ranker.FEATURES)
+check("모델 피처 12개 (cf_score · rating · rush_hour · weather · ds_ratio)",
+      ml_ranker.info().get("features") == ml_ranker.FEATURES and len(ml_ranker.FEATURES) == 12)
+bad_weather = dict(feat, weather=0.30, ds_ratio=4.0)
+check("폭설 · 수급 과열이면 수락 예측 하락", ml_ranker.predict([bad_weather])[0] < ml_ranker.predict([feat])[0])
+
+section("통행료 · 오지 공차 · 장재물 · 예약")
+from datetime import timedelta  # noqa: E402
+t1, t5 = pe.mock_toll_lookup(1.0, 300), pe.mock_toll_lookup(25.0, 300)
+check("통행료: 25톤(5종) > 1톤(1종)", t5["amount"] > t1["amount"] > 0, f"{t1['amount']:,}원 · {t5['amount']:,}원")
+check("20km 미만은 통행료 0", pe.mock_toll_lookup(11.0, 15)["amount"] == 0)
+check("강원 하차 → 오지 공차 +10%", pe.remote_surcharge("강원", 30)["rate"] == 0.10)
+check("거점 50km 밖 → 오지 공차", pe.remote_surcharge("경북", 80)["rate"] == 0.10)
+check("거점 인근 → 할증 없음", pe.remote_surcharge("경기", 10)["rate"] == 0.0)
+check("장재물 6m → +10%", pe.long_cargo_surcharge(6200, 9100)["rate"] == 0.10)
+check("장재물 9m 이상 → +20%", pe.long_cargo_surcharge(9500, 10100)["rate"] == 0.20)
+check("짧은 품목 → 할증 없음", pe.long_cargo_surcharge(1200, 9100)["rate"] == 0.0)
+now = datetime(2026, 11, 17, 10)
+check("24시간 이전 예약 → 5% 할인", pe.reservation(now + timedelta(hours=30), now)["discount"] == 0.05)
+check("곧 상차 예약 → 할인 없음", pe.reservation(now + timedelta(hours=3), now)["discount"] == 0.0)
+check("지난 시각 → 즉시 배차", not pe.reservation(now - timedelta(hours=1), now)["reserved"])
+e1 = pricing.estimate("11톤 탑차", "경기 평택시", "강원 원주시", market=calm)
+f1 = {x["key"]: x["amount"] for x in e1["factors"]}
+check("운임에 통행료 · 오지 할증 반영", f1["toll"] > 0 and f1["remote"] > 0, f"통행료 {f1['toll']:,} · 오지 {f1['remote']:,}")
+e2 = pricing.estimate("25톤 무진동", "울산 남구", "경기 파주시", market=calm, max_item_mm=9500,
+                      pickup_at=datetime.now() + timedelta(days=2))
+f2 = {x["key"]: x["amount"] for x in e2["factors"]}
+check("장재물 할증 · 조기 예약 할인 반영", f2["long"] > 0 and f2["reservation"] < 0)
+
+section("파손주의 · 냉동 최상단 배치")
+from backend.engines.packer.engine import Options  # noqa: E402
+from backend.engines.packer.models import ItemSpec  # noqa: E402
+from backend.engines.packer.service import plan  # noqa: E402
+from backend.engines.packer.validate import validate  # noqa: E402
+r = plan([ItemSpec("팔레트", 1100, 1100, 1000, 300, qty=4), ItemSpec("유리", 800, 600, 500, 40, qty=3, fragile=True),
+          ItemSpec("냉동", 600, 400, 300, 15, qty=4, frozen=True)], truck_type="11톤 냉동탑차", cold_chain=True,
+         options=Options(record_steps=False))
+top = next(c for c in r["constraints"] if c["key"] == "top_only")
+check("파손주의 · 냉동 상자 위 적재 없음", top["status"] == "pass" and not r["unplaced"], top["detail"])
+rows = [dict(item_id="A", x=0, y=0, z=0, length=1000, width=1000, height=500, weight_kg=10, orig=[1000, 1000, 500],
+             upright=True, stackable=True, max_top_load=None, drop=1, frozen=True),
+        dict(item_id="B", x=0, y=0, z=500, length=1000, width=1000, height=500, weight_kg=10, orig=[1000, 1000, 500],
+             upright=True, stackable=True, max_top_load=None, drop=1)]
+chk = next(c for c in validate(TRUCKS["5톤 냉동탑차"], rows, min_support=0.8, lifo=False, cold_chain=True)
+           if c["key"] == "top_only")
+check("냉동 상자 위에 다른 상자 → 위반", chk["status"] == "fail")
 
 finish()

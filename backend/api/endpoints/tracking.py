@@ -2,15 +2,18 @@
 
 import asyncio
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+import hashlib
+import os
+
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
 from ...config import settings
 from ...core.database import store
 from ...core.errors import ApiError
 from ...core.redis_client import available as redis_available, get_redis
-from ...core.security import require
+from ...core.security import current_user, require
 from ...schemas.matching_schema import AskIn, PingBatchIn, PingIn
-from ...schemas.order_schema import CompleteIn
 from ...workers import gps_stream_worker
 
 router = APIRouter(tags=["tracking"])
@@ -29,9 +32,40 @@ async def start_run(order_id: str, user: dict = Driver):
     return store.start_run(user["org_id"], order_id)
 
 
+POD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "pod_photos")
+POD_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+
+
 @router.post("/driver/runs/{order_id}/complete")
-async def complete_run(order_id: str, body: CompleteIn, user: dict = Driver):
-    return store.complete_run(user["org_id"], order_id, body.receiver)
+async def complete_run(order_id: str, receiver: str = Form(...), photo: UploadFile = File(...),
+                       user: dict = Driver):
+    """하차 완료 · 전자인수증 (multipart). 인수증 사진 필수 → SHA-256 을 인수증 해시에 묶고 파일을 보관한다."""
+    data = await photo.read()
+    if not data:
+        raise ApiError(400, "인수증 사진을 첨부해 주세요.")
+    if len(data) > 5 * 1024 * 1024:
+        raise ApiError(400, "인수증 사진은 5MB 이하만 가능합니다.")
+    ext = POD_TYPES.get(photo.content_type or "")
+    if not ext:
+        raise ApiError(400, "인수증 사진은 JPG · PNG · WEBP 이미지만 가능합니다.")
+    meta = {"filename": photo.filename, "size": len(data), "content_type": photo.content_type,
+            "sha256": hashlib.sha256(data).hexdigest()}
+    res = store.complete_run(user["org_id"], order_id, receiver, photo=meta)
+    os.makedirs(POD_DIR, exist_ok=True)
+    with open(os.path.join(POD_DIR, f"{order_id}{ext}"), "wb") as f:  # 화주 · 관제가 볼 수 있게 보관
+        f.write(data)
+    return res
+
+
+@router.get("/orders/{order_id}/pod/photo")
+async def pod_photo(order_id: str, user: dict = Depends(current_user)):
+    """인수증 사진 (화주 · 배정 기사 · 관제만). 시드 · 이전 데이터는 사진 파일이 없다."""
+    store.order_detail(order_id, user)  # 접근 권한 확인
+    for ext in POD_TYPES.values():
+        path = os.path.join(POD_DIR, f"{order_id}{ext}")
+        if os.path.exists(path):
+            return FileResponse(path)
+    raise ApiError(404, "보관된 인수증 사진이 없습니다 (시드 · 이전 데이터).")
 
 
 # ------------------------------------------------------------------ 관제
@@ -135,6 +169,12 @@ async def ping_batch(body: PingBatchIn):
             rejected.append({"order_id": p.order_id, "status": e.status, "detail": e.detail})
     queued = await _enqueue(ok) if ok else False
     return {"accepted": len(ok), "rejected": rejected, "queued": queued}
+
+
+@router.get("/admin/drivers/{driver_id}/detail", dependencies=[Admin])
+async def driver_detail(driver_id: str):
+    """관제 우측 상세 패널: 기사 연락처 · 현재 운행(계획 경로 · 이탈 · 지연) · 감사 로그 · 인수증 · 리뷰."""
+    return store.admin_driver_detail(driver_id)
 
 
 @router.get("/admin/tracking", dependencies=[Admin])

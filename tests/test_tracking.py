@@ -79,6 +79,26 @@ r = ping(along(path, o["progress"] / 100)[0])
 check("Delay Delta 30분 초과 → 지연 알림", r["delay_minutes"] > 30 and bool(store._open_anomaly(o["id"], "DELAY")),
       f"+{r['delay_minutes']}분")
 
+section("계획 경로 planned_polyline · 관제 상세 패널")
+from backend.engines.matcher import spatial as geo  # noqa: E402
+pts = [(37.12345, 127.54321), (36.5, 127.0), (35.1, 129.04)]
+check("폴리라인 인코딩 ↔ 디코딩 왕복", geo.decode_polyline(geo.encode_polyline(pts)) == pts)
+check("모든 화물에 planned_polyline 저장", all(x.get("planned_polyline") for x in store.orders.values()))
+raw = geo.route(geo.geocode(o["origin"]), geo.geocode(o["destination"]))
+check("저장된 경로 = 도로 경로", store._path(o) == [tuple(p) for p in raw], f"{len(raw)}개 지점")
+o["planned_polyline"] = geo.encode_polyline([raw[0], raw[-1]])  # 계획 경로를 직선으로 바꾸면
+far = te.locate(raw[len(raw) // 2], store._path(o))["distance_km"]
+check("이탈 판정은 저장된 계획 경로 기준", far > 0.5, f"도로 중간 지점 ↔ 직선 계획 {far:.1f}km")
+store._plan_route(o)
+det = store.admin_driver_detail(o["driver_id"])
+check("상세 패널: 기사 · 운행 · 감사 로그 · 리뷰", det["driver"]["phone"] and det["run"]["id"] == o["id"]
+      and det["audit"] and det["run"]["planned_points"] == len(raw) and "reviews" in det)
+try:
+    store.admin_driver_detail("D-999")
+    check("없는 기사 → 404", False)
+except ApiError as e:
+    check("없는 기사 → 404", e.status == 404)
+
 section("감사 로그 SHA-256 해시 체인")
 v = verify_chain(store.audit)
 check("전체 체인 정상", v["ok"], f"{v['checked']}줄")

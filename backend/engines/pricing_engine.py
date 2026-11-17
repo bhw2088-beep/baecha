@@ -126,3 +126,83 @@ def market(region: str, real_demand: int = 0, real_supply: int = 0, at: datetime
             "surge": surge_multiplier(ratio), "surge_on": ratio > SURGE_AT, "rush_hour": at.hour in RUSH_HOURS,
             "lambda": round(demand_lambda(region, at.hour), 1), "weather": mock_get_weather_condition(region, at),
             "at": at.strftime("%H시")}
+
+
+# ------------------------------------------------------------------ 통행료 룩업 (모의 근사)
+# 한국도로공사 폐쇄식 요금 구조를 단순화한 근사표: 기본요금 + 주행거리 × 차종별 km 단가.
+# 차종 구분은 톤수로 근사 (실제는 축수 · 윤폭 기준). 도로거리 중 고속도로 비율은 80% 로 가정.
+TOLL_BASE = 900
+TOLL_CLASS_BY_TON = [(1.0, 1), (2.5, 2), (5.0, 3), (11.0, 4), (25.0, 5)]
+TOLL_PER_KM = {1: 44.3, 2: 45.2, 3: 47.0, 4: 62.9, 5: 74.4}
+HIGHWAY_SHARE = 0.8
+TOLL_MIN_KM = 20  # 이보다 짧으면 고속도로를 타지 않는 것으로 본다
+
+
+def toll_class(tons: float) -> int:
+    for limit, cls in TOLL_CLASS_BY_TON:
+        if tons <= limit:
+            return cls
+    return 5
+
+
+def mock_toll_lookup(tons: float, road_km: float) -> dict:
+    """차종(톤수) · 도로거리 → 예상 고속도로 통행료 (100원 단위)."""
+    cls = toll_class(tons)
+    if road_km < TOLL_MIN_KM:
+        return {"class": cls, "highway_km": 0.0, "amount": 0, "note": f"{TOLL_MIN_KM}km 미만 · 일반도로"}
+    hw = round(road_km * HIGHWAY_SHARE, 1)
+    amount = int(round((TOLL_BASE + hw * TOLL_PER_KM[cls]) / 100) * 100)
+    return {"class": cls, "highway_km": hw, "amount": amount,
+            "note": f"{cls}종 · 고속도로 약 {hw:.0f}km × {TOLL_PER_KM[cls]}원 + 기본 {TOLL_BASE}원 (모의 근사)"}
+
+
+# ------------------------------------------------------------------ 오지 공차 할증
+REMOTE_REGIONS = {"강원"}      # 돌아오는 화물(회차 물량)이 적은 권역
+REMOTE_HUB_KM = 50             # 하차지가 가장 가까운 물류 거점에서 이만큼 넘게 떨어지면 오지
+REMOTE_RATE = 0.10
+
+
+def remote_surcharge(dest_region: str, hub_distance_km: float) -> dict:
+    """하차지에서 빈 차로 돌아와야 할 가능성이 크면 공차 회송 할증."""
+    reasons = []
+    if dest_region in REMOTE_REGIONS:
+        reasons.append(f"{dest_region} 권역 회차 물량 부족")
+    if hub_distance_km > REMOTE_HUB_KM:
+        reasons.append(f"가장 가까운 물류 거점까지 {hub_distance_km:.0f}km")
+    return {"rate": REMOTE_RATE if reasons else 0.0, "reason": " · ".join(reasons) or "거점 인근"}
+
+
+# ------------------------------------------------------------------ 장재물(긴 화물) 할증
+LONG_CARGO_MM = 6000          # 6m 이상
+LONG_CARGO_RATIO = 0.8        # 또는 적재함 길이의 80% 이상
+LONG_CARGO_XL_MM = 9000       # 9m 이상은 특수 장재물
+
+
+def long_cargo_surcharge(max_item_mm: float | None, truck_length_mm: float | None) -> dict:
+    if not max_item_mm:
+        return {"rate": 0.0, "reason": "품목 길이 정보 없음"}
+    ratio = max_item_mm / truck_length_mm if truck_length_mm else 0
+    if max_item_mm >= LONG_CARGO_XL_MM:
+        return {"rate": 0.20, "reason": f"최장 품목 {max_item_mm / 1000:.1f}m ≥ 9m (특수 장재물)"}
+    if max_item_mm >= LONG_CARGO_MM or ratio >= LONG_CARGO_RATIO:
+        return {"rate": 0.10, "reason": f"최장 품목 {max_item_mm / 1000:.1f}m · 적재함의 {ratio:.0%}"}
+    return {"rate": 0.0, "reason": f"최장 품목 {max_item_mm / 1000:.1f}m"}
+
+
+# ------------------------------------------------------------------ 예약 배차
+EARLY_BOOKING_HOURS = 24
+EARLY_BOOKING_DISCOUNT = 0.05
+
+
+def reservation(pickup_at: datetime | None, now: datetime | None = None) -> dict:
+    """상차 예약 시각 → 몇 시간 뒤인지 · 조기 예약 할인 · 예약 시간대 기준으로 수급을 볼지."""
+    now = now or datetime.now()
+    if pickup_at is not None and pickup_at.tzinfo:  # 시간대가 붙어 오면 서버 현지 시각으로
+        pickup_at = pickup_at.astimezone().replace(tzinfo=None)
+    if not pickup_at or pickup_at <= now:
+        return {"reserved": False, "hours_ahead": 0.0, "discount": 0.0, "use_forecast": False}
+    hours = (pickup_at - now).total_seconds() / 3600
+    return {"reserved": True, "hours_ahead": round(hours, 1),
+            "discount": EARLY_BOOKING_DISCOUNT if hours >= EARLY_BOOKING_HOURS else 0.0,
+            "use_forecast": hours >= 1, "rush_hour": pickup_at.hour in RUSH_HOURS,
+            "pickup_at": pickup_at.isoformat(timespec="minutes")}

@@ -142,7 +142,9 @@ def _offer_card(o: dict):
             f'<div class="ct-big" style="margin-top:8px">{o["title"]}</div>'
             f'<div class="ct-muted">{o["id"]} · {o["shipper"]} '
             f'<span style="color:#F79009">{ui.stars(o["shipper_rating"]["avg"], o["shipper_rating"]["count"], "화주 평가 없음")}</span>'
-            f' · 요청 {o["truck_type"]}</div></div>'
+            f' · 요청 {o["truck_type"]}'
+            + (f' · <b>예약 상차 {ui.dt_text(o["pickup_at"], "%m.%d %H:%M")}</b>' if o.get("pickup_at") else "")
+            + '</div></div>'
             f'<div style="text-align:right;flex-shrink:0"><div class="ct-muted" style="font-size:11.5px">응답 남은 시간</div>'
             f'<div style="font-size:30px;font-weight:800;color:{tone};font-variant-numeric:tabular-nums">{left}초</div></div></div>'
             f'<div class="ct-track" style="margin:8px 0 2px"><div class="fill" style="width:{pct:.0f}%;background:{tone}"></div></div>'
@@ -299,9 +301,13 @@ def run_actions(o: dict):
 def complete_dialog(o: dict):
     ui.html(f'<div class="ct-muted">{o["id"]} · {o["title"]}</div><div class="ct-big">{o["destination"]}</div>')
     receiver = st.text_input("인수자 성함", placeholder="물류센터 수령인 이름")
+    photo = st.file_uploader("인수증 사진 (필수 · 서명된 인수증 또는 하차 화물 사진, 5MB 이하)",
+                             type=["jpg", "jpeg", "png", "webp"])
+    st.caption("사진의 SHA-256 해시가 전자인수증에 함께 기록됩니다. 사진 인증이 없으면 운송비를 청구할 수 없어요.")
     confirm = st.checkbox("화물을 이상 없이 인계했고, 인수자가 서명에 동의했습니다.")
-    if st.button("서명 완료", type="primary", width="stretch", disabled=not (receiver and confirm)):
-        if ui.act(api.post, f"/driver/runs/{o['id']}/complete", {"receiver": receiver},
+    if st.button("서명 완료", type="primary", width="stretch", disabled=not (receiver and confirm and photo)):
+        if ui.act(api.post, f"/driver/runs/{o['id']}/complete", data={"receiver": receiver},
+                  files={"photo": (photo.name, photo.getvalue(), photo.type)},
                   success="배송 완료! 전자인수증이 발급되었습니다. 이제 운송비를 청구할 수 있어요."):
             st.rerun()
 
@@ -317,6 +323,7 @@ def earnings():
         {"label": "평균 정산 소요", "value": p["avg_settle_days"] or "-", "unit": "일", "note": "청구 → 입금"},
     ])
     reviews_ui.pending_reviews_panel("driver")
+    _payouts_panel()
 
     jobs = ui.load(api.get, "/driver/completed")
     ui.section("운송 완료 내역", "완료 건의 인수증을 확인하고 화주에게 운송비 청구서를 보내세요")
@@ -355,6 +362,24 @@ def earnings():
             invoice_dialog(j)
     else:
         c2.button(j["billing_label"], disabled=True, width="stretch")
+
+
+def _payouts_panel():
+    """내 수익금 송금: 송금 대기 금액 · 송금 내역 (관제 일괄 송금 · 모의 이체)."""
+    po = ui.load(api.get, "/driver/payouts")
+    pend, hist = po["pending"], po["history"]
+    head = (f"수익금 송금 · 대기 {ui.won(pend['net'])} ({pend['count']}건)" if pend else "수익금 송금 · 대기 없음") \
+        + f" · 송금 완료 {len(hist)}회"
+    with st.expander(head, icon=":material/account_balance:"):
+        st.caption("화주 결제가 끝난 운송비는 관제가 기사별로 묶어 일괄 송금합니다 (플랫폼 수수료 3% 차감 · 모의 이체).")
+        if hist:
+            st.dataframe(pd.DataFrame([{
+                "송금 번호": h["id"], "일시": ui.dt_text(h["at"], "%Y.%m.%d %H:%M"), "건수": h["count"],
+                "결제 합계": h["gross"], "수수료": h["fee"], "송금액": h["net"], "거래번호": h["tid"],
+            } for h in hist]), hide_index=True, width="stretch", column_config={
+                k: st.column_config.NumberColumn(format="%,d원") for k in ("결제 합계", "수수료", "송금액")})
+        else:
+            st.caption("아직 송금 내역이 없습니다.")
 
 
 @st.dialog("화주 운송비 청구서", width="large")

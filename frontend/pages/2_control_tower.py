@@ -96,6 +96,7 @@ def control_map():
         live_map(layer)
         ui.html(ui.legend())
     with right:
+        vehicle_panel()
         offers_list()
 
         st.write("")
@@ -158,6 +159,114 @@ def tracking_market_panel():
                 "러시아워": "●" if m["rush_hour"] else "",
             } for m in mk]), hide_index=True, width="stretch", column_config={
                 "D/S": st.column_config.ProgressColumn(min_value=0, max_value=4, format="%.2f")})
+
+
+# ======================================================================= 우측 상세 패널
+def _pick_vehicle(key: str):
+    st.session_state.ct_vehicle = st.session_state[key]
+    st.session_state.ct_vehicle_closed = None
+
+
+def _close_vehicle():
+    st.session_state.ct_vehicle_closed = st.session_state.get("ct_vehicle")
+    st.session_state.ct_vehicle = None
+
+
+def vehicle_panel():
+    """오른쪽 상세 패널: 지도에서 차량을 누르거나 목록에서 고르면 기사 연락처 · 현재 운행 · 감사 로그 ·
+    인수증 · 리뷰를 한 번에 보여 준다."""
+    fleet = ui.load(api.get, "/admin/fleet")
+    named = [v for v in fleet if v["named"]]
+    ids = [v["id"] for v in named]
+    label = {v["id"]: f"{v['plate']} · {v['driver']} · {v['status_text'][:14]}" for v in named}
+    cur = st.session_state.get("ct_vehicle")
+    key = f"ct_pick_{cur}"
+    # 목록을 직접 바꿨을 때만 반영 (지도에서 누른 배경 차량은 목록에 없어도 패널이 닫히지 않게)
+    st.selectbox("차량 상세", [None, *ids], index=(ids.index(cur) + 1) if cur in ids else 0,
+                 format_func=lambda i: "지도에서 차량을 누르거나 여기서 선택" if i is None else label[i],
+                 key=key, label_visibility="collapsed", on_change=_pick_vehicle, args=(key,))
+    if not cur:
+        return
+    if not cur.startswith("D-"):
+        with st.container(border=True):
+            st.caption("배경 차량(시연용 네트워크 차량)은 등록 기사가 아니라 상세 정보가 없습니다.")
+            st.button("닫기", on_click=_close_vehicle, key="ct_close_bg")
+        return
+    d = ui.load(api.get, f"/admin/drivers/{cur}/detail")
+    dr, r = d["driver"], d["rating"]
+    plate_ok = dr["plate_type"] == "COMMERCIAL_YELLOW"
+    with st.container(border=True):
+        c1, c2 = st.columns([4, 1], vertical_alignment="center")
+        c1.html(f'<div class="ct"><div class="ct-eyebrow">VEHICLE · {dr["id"]}</div>'
+                f'<div class="ct-big">{dr["name"]} 차주 <span style="color:#F79009;font-size:15px">'
+                f'{ui.stars(r["avg"], r["count"])}</span></div></div>')
+        c2.button("닫기", on_click=_close_vehicle, key="ct_close", icon=":material/close:", width="stretch")
+        badges = (ui.pill(d["state"], "blue") + " "
+                  + ui.pill("노란 번호판" if plate_ok else "번호판 부적합", "green" if plate_ok else "red")
+                  + (" " + ui.pill("이용 제한", "red") if dr["blacklisted"] else ""))
+        ui.html(f'<div>{badges}</div>'
+                f'<div class="ct-muted" style="margin-top:6px">📞 <b class="ct-strong">{dr["phone"]}</b>'
+                f'{" · " + ui.escape(dr["email"]) if dr.get("email") else ""}</div>'
+                f'<div class="ct-muted">{dr["plate"]} · {dr["truck_type"]} ({dr["tonnage"]:g}톤) · 대기 {dr["location"]} · '
+                f'이번 달 {dr["month_runs"]}회 · 완료 {d["completed"]}건</div>'
+                + (f'<div style="color:#B42318;font-size:12.5px">제한 사유: {ui.escape((dr["blacklist"] or {}).get("reason", ""))}</div>'
+                   if dr["blacklisted"] else ""))
+
+        run = d["run"]
+        if run:
+            ui.section("현재 운행", run["id"])
+            gps = (f'GPS {"수신 중" if run["gps_live"] else "끊김"} · 핑 {run["pings"]}회 · 경로까지 '
+                   f'{run["dist_km"] if run["dist_km"] is not None else "-"}km · 연속 이탈 {run["off_count"]}회')
+            ui.html(f'<div class="ct-strong">{ui.escape(run["title"])}</div>'
+                    f'<div class="ct-muted">{run["shipper"]} · {ui.won(run["fare"])}</div>'
+                    + ui.route_bar(run["origin"], run["destination"], run["progress"],
+                                   f"진행 {run['progress']:.0f}% · {run['speed']}km/h",
+                                   f"도착 {run['eta_clock'] or '-'}")
+                    + f'<div class="ct-muted" style="font-size:12.5px">{gps}</div>'
+                    + f'<div class="ct-muted" style="font-size:12.5px">계획 경로(planned_polyline) {run["planned_points"]}개 지점 · '
+                      f'{run["polyline_chars"]}자</div>'
+                    + (ui.banner(f"지연 +{run['delay_minutes']}분", "amber") if run["delay_minutes"] else "")
+                    + (ui.banner("계획 경로 이탈 중", "red") if run["deviated"] else ""))
+        elif d["offer"]:
+            o = d["offer"]
+            ui.section("배차 제안 응답 대기", o["id"])
+            ui.html(f'<div class="ct-muted">{ui.escape(o["title"])} · {o["origin"]} → {o["destination"]}</div>')
+        for a in d["anomalies"]:
+            ui.html(ui.banner(f"⚠ {a['type_label']} · {a['text']}", "red"))
+
+        t1, t2, t3 = st.tabs([f"감사 로그 · {len(d['audit'])}", "인수증", f"리뷰 · {r['count']}"])
+        with t1:
+            if d["audit"]:
+                st.caption(f"{d['audit_order']} · SHA-256 해시 체인 (최근 12줄)")
+                ui.html("".join(
+                    f'<div style="font-size:12.5px;padding:3px 0;border-top:1px solid var(--line)">'
+                    f'<span class="ct-mono">{ui.dt_text(e["at"], "%m.%d %H:%M")}</span> <b>{ui.escape(e["label"])}</b> '
+                    f'<span class="ct-muted">{e["from"] or ""}→{e["to"]} · {ui.escape(e["actor"])} · '
+                    f'{(e.get("current_hash") or "")[:10]}</span></div>' for e in d["audit"]))
+            else:
+                st.caption("감사 로그가 없습니다.")
+        with t2:
+            pod = d["pod"]
+            if pod:
+                ui.html(f'<div class="ct-strong">{pod["order_id"]} · {ui.escape(pod["title"])}</div>'
+                        f'<div class="ct-muted">인수자 {ui.escape(pod["receiver"])} · 서명 {ui.dt_text(pod["signed_at"], "%Y.%m.%d %H:%M")}</div>'
+                        f'<div class="ct-mono" style="font-size:12.5px">해시 {pod["hash"]}</div>')
+            else:
+                st.caption("발급된 전자인수증이 없습니다.")
+        with t3:
+            if d["reviews"]:
+                if r["top_tags"]:
+                    ui.html('<div>' + " ".join(ui.pill(t, "gray") for t in r["top_tags"]) + '</div>')
+                ui.html("".join(
+                    f'<div style="font-size:12.5px;padding:4px 0;border-top:1px solid var(--line)">'
+                    f'<span style="color:#F79009">{ui.star_bar(v["stars"])}</span> '
+                    f'<span class="ct-muted">{ui.escape(v["writer"])} · {ui.dt_text(v["at"], "%m.%d")} · '
+                    f'{ui.escape(", ".join(v["tags"]))}</span>'
+                    + (f'<div>{ui.escape(v["comment"])}</div>' if v["comment"] else "") + '</div>'
+                    for v in d["reviews"]))
+            else:
+                st.caption("받은 리뷰가 없습니다.")
+    st.write("")
 
 
 @st.fragment(run_every="3s")
@@ -227,7 +336,14 @@ def live_map(layer: str):
                  "style": {"backgroundColor": "#0E1116", "color": "#F7F8FA", "fontSize": "12px",
                            "borderRadius": "8px", "padding": "8px 10px"}},
     )
-    st.pydeck_chart(deck, height=560, key="fleet_map")
+    event = st.pydeck_chart(deck, height=560, key="fleet_map", on_select="rerun", selection_mode="single-object")
+    # 차량 점 클릭 → 오른쪽 상세 패널 열기 (패널은 지도 밖에 있으므로 화면 전체를 다시 그린다)
+    picked = ((getattr(event, "selection", None) or {}).get("objects") or {}).get("trucks") or []
+    vid = picked[0].get("id") if picked else None
+    if vid and vid != st.session_state.get("ct_vehicle") and vid != st.session_state.get("ct_vehicle_closed"):
+        st.session_state.ct_vehicle = vid
+        st.session_state.ct_vehicle_closed = None
+        st.rerun()
 
 
 HUBS = {"서울/인천": (37.50, 126.80), "평택항": (36.97, 126.83), "대전 HUB": (36.35, 127.38), "대구": (35.87, 128.60),

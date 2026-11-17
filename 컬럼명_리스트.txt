@@ -20,6 +20,7 @@
    matching_metrics_logs   id★(MR-n) · at · orders · assigned · latency_ms · deadhead_reduction_pct
                            · data(drivers · greedy_assigned · hungarian_avg_km · greedy_avg_km · threshold_filtered · failed)
    audit_logs (컬럼 추가)  previous_hash · current_hash (SHA-256 해시 체인) — 기존 DB 는 서버 시작 시 자동 추가
+   orders (컬럼 추가)      planned_polyline (계획 경로 encoded polyline, Text) — 기존 DB 는 자동 추가 · 예전 화물은 경로 계산해 채움
  새 필드
    drivers   plate_type(COMMERCIAL_YELLOW · PRIVATE_WHITE · RENTAL · INVALID) · tonnage · blacklisted · blacklist{at, by, reason, auto}
              approval.biz_check · approval.documents[kind = license · cargo_license · vehicle]
@@ -36,7 +37,8 @@
  새 API
    /compliance/check · /tracking/ping(·/batch) · /admin/tracking · /admin/audit/verify · /pricing/market ·
    /reviews(tags · pending · mine) · /admin/reviews · /admin/reputation · /admin/drivers/{id}/blacklist ·
-   /admin/matching/metrics · /admin/agent/ask · /admin/agent/incident/{id} · /admin/agent/tuning
+   /admin/matching/metrics · /admin/agent/ask · /admin/agent/incident/{id} · /admin/agent/tuning ·
+   /admin/drivers/{id}/detail (관제 우측 상세 패널)
 
 
  ============================================================================

@@ -135,7 +135,7 @@ for h, n in enumerate(per_hour):
             for o in list(store.orders.values()):
                 if o["status"] == "ASSIGNED" and o["title"].startswith("[스트레스") and rng.random() < 0.6:
                     store.start_run(o["driver_id"], o["id"])
-                    store.complete_run(o["driver_id"], o["id"], "인수자")
+                    store.complete_run(o["driver_id"], o["id"], "인수자", photo={"filename": "pod.jpg", "size": 1024, "sha256": "ab" * 32})
 elapsed = time.perf_counter() - t_start
 m = store.matching_metrics()
 lat = sorted(tick_latency)

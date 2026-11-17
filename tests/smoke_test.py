@@ -135,8 +135,16 @@ if target:
     check("GPS 핑 인입 (기사 토큰 · 배정 기사 대조)", pong["accepted"], pong["pipeline"])
     check("토큰 없는 핑 거부", requests.post(API + "/tracking/ping", json={"order_id": target, "lat": lat, "lon": lon},
                                          timeout=10).status_code == 401)
-    done = call("POST", f"/driver/runs/{target}/complete", driver, json={"receiver": "홍길동"})
-    check("하차 완료 · 전자인수증", done["status"] == "DELIVERED" and done["pod"]["hash"].startswith("0x"))
+    call("POST", f"/driver/runs/{target}/complete", driver, expect=422, data={"receiver": "홍길동"})
+    check("인수증 사진 없으면 하차 완료 거부", True)
+    png = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+                        "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082")
+    done = call("POST", f"/driver/runs/{target}/complete", driver, data={"receiver": "홍길동"},
+                files={"photo": ("pod.png", png, "image/png")})
+    check("하차 완료 · 전자인수증 + 사진 SHA-256", done["status"] == "DELIVERED" and done["pod"]["hash"].startswith("0x")
+          and len(done["pod"]["photo"]["sha256"]) == 64)
+    r = requests.get(f"{API}/orders/{target}/pod/photo", headers={"Authorization": f"Bearer {admin}"}, timeout=10)
+    check("관제가 인수증 사진 확인", r.status_code == 200 and r.content == png)
     call("POST", f"/driver/completed/{target}/invoice", driver, json={"extra_fee": 10_000, "toll_fee": 5_000})
     owner = call("GET", f"/orders/{target}", admin)["shipper"]
     if owner == "삼성물류":

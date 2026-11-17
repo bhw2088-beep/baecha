@@ -11,5 +11,8 @@ __pycache__/
 발표자료_주요코드.md
 변경점_정리.md
 
+# 인수증 사진 (운영 데이터)
+backend/data/pod_photos/
+
 # 에디터
 .vscode/

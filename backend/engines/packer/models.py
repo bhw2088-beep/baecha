@@ -18,6 +18,8 @@ class ItemSpec:
     stackable: bool = True            # False = 적층 불가(파손주의): 위에 아무것도 못 올림
     max_top_load: float | None = None  # 상부 허용하중(kg). None = 제한 없음
     drop: int = 1                     # 하차 순서 (1 = 가장 먼저 내림)
+    fragile: bool = False             # 파손주의 → 최상단 배치 강제 (위에 아무것도 못 올림)
+    frozen: bool = False              # 냉동 화물 → 최상단 배치 강제 (냉기 순환 · 하중 결로 방지)
 
 
 @dataclass
@@ -33,6 +35,8 @@ class Box:
     stackable: bool
     cap: float        # 위에 얹을 수 있는 총 하중
     drop: int
+    fragile: bool = False
+    frozen: bool = False
 
     @property
     def volume(self) -> int:
@@ -54,14 +58,16 @@ class Box:
 def expand(items: list[ItemSpec]) -> list[Box]:
     boxes = []
     for sku, it in enumerate(items):
-        if not it.stackable:
+        top_only = it.fragile or it.frozen  # 파손주의 · 냉동은 최상단에만 → 위에 적재 금지와 같다
+        if not it.stackable or top_only:
             cap = 0.0
         else:
             cap = math.inf if it.max_top_load is None else float(it.max_top_load)
         for n in range(it.qty):
             boxes.append(Box(uid=f"S{sku + 1:02d}-{n + 1:03d}", sku=sku, name=it.name, l=it.length, w=it.width,
-                             h=it.height, weight=float(it.weight), upright=it.upright, stackable=it.stackable,
-                             cap=cap, drop=it.drop))
+                             h=it.height, weight=float(it.weight), upright=it.upright,
+                             stackable=it.stackable and not top_only, cap=cap, drop=it.drop,
+                             fragile=it.fragile, frozen=it.frozen))
     return boxes
 
 
@@ -101,6 +107,7 @@ class Placement:
             "length": self.dx, "width": self.dy, "height": self.dz,
             "weight_kg": b.weight, "load_order": self.step,
             "drop": b.drop, "upright": b.upright, "stackable": b.stackable,
+            "fragile": b.fragile, "frozen": b.frozen,
             "max_top_load": None if b.cap == float("inf") else b.cap,
             "orig": [b.l, b.w, b.h], "rotated": (self.dx, self.dy, self.dz) != (b.l, b.w, b.h),
             "support_ratio": round(self.support_ratio, 3), "load_on_top": round(self.load, 1),

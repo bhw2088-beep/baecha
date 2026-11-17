@@ -44,7 +44,13 @@ store.accept_offer(driver, o["id"])
 check("수락 → ASSIGNED", o["status"] == "ASSIGNED")
 store.start_run(driver, o["id"])
 check("상차 → IN_TRANSIT", o["status"] == "IN_TRANSIT")
-store.complete_run(driver, o["id"], "홍길동")
+try:
+    store.complete_run(driver, o["id"], "홍길동")
+    check("인수증 사진 없으면 하차 완료 불가", False)
+except ApiError as e:
+    check("인수증 사진 없으면 하차 완료 불가", e.status == 400 and "사진" in e.detail)
+store.complete_run(driver, o["id"], "홍길동", photo={"filename": "pod.jpg", "size": 1024, "sha256": "ab" * 32})
+check("인수증에 사진 SHA-256 기록", o["pod"]["photo"]["sha256"] == "ab" * 32)
 check("하차 → DELIVERED + 청구 UNBILLED", o["status"] == "DELIVERED" and o["billing"] == "UNBILLED")
 try:
     store.approve_invoice(o["shipper_id"], o["id"])
@@ -93,5 +99,26 @@ check("취소도 재무 감사 로그에", refund_events and refund_events[0]["f
 inv = store.monthly_invoice(o["shipper_id"])
 check("월별 인보이스 (취소분 제외)", inv["total"] == sum(ln["amount"] for ln in inv["lines"])
       and all(ln["tid"] != p["tid"] for ln in inv["lines"]), f"{inv['period']} · {inv['count']}건 · {inv['total']:,}원")
+
+section("기사 수익금 일괄 송금 (모의)")
+pend = store.payable_summary()
+check("송금 대기 = 결제 완료 · 미송금 건", pend and all(r["net"] == r["gross"] - r["fee"] for r in pend),
+      f"{len(pend)}명 · {sum(r['net'] for r in pend):,}원")
+res = store.run_payouts("테스트")
+check("일괄 송금 → 기사별 거래번호", res["count"] == len(pend) and all(p["tid"].startswith("MOCK-TR-") for p in res["payouts"]))
+check("송금 후 대기 없음", store.payable_summary() == [])
+check("송금 감사 로그 (재무)", any(e["event"] == "payout" and e["financial"] for e in store.audit))
+paid = next(x for x in store.orders.values() if x.get("payout_id"))
+try:
+    store.refund_payment(paid["id"], "테스트")
+    check("송금된 건 결제 취소 불가", False)
+except ApiError as e:
+    check("송금된 건 결제 취소 불가", e.status == 409)
+try:
+    store.run_payouts("테스트")
+    check("송금할 금액 없으면 409", False)
+except ApiError as e:
+    check("송금할 금액 없으면 409", e.status == 409)
+check("해시 체인 정상", order_fsm.verify_chain(store.audit)["ok"])
 
 finish()

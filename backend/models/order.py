@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from geoalchemy2 import Geography
-from sqlalchemy import DateTime, Integer, String
+from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -59,6 +59,7 @@ class OrderRow(Base):
     destination: Mapped[str] = mapped_column(String(80))
     origin_geom = mapped_column(Geography("POINT", srid=4326))
     dest_geom = mapped_column(Geography("POINT", srid=4326))
+    planned_polyline: Mapped[str | None] = mapped_column(Text, nullable=True)  # 계획 경로 (encoded polyline)
     price: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     data: Mapped[dict] = mapped_column(JSONB)

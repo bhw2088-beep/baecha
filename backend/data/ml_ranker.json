@@ -4,8 +4,8 @@
   "samples": 8000,
   "train": 6400,
   "test": 1600,
-  "accept_ratio": 0.787,
-  "auc": 0.859,
+  "accept_ratio": 0.779,
+  "auc": 0.85,
   "features": [
     "pickup_km",
     "util",
@@ -16,18 +16,22 @@
     "accept_rate",
     "cf_score",
     "rating",
-    "rush_hour"
+    "rush_hour",
+    "weather",
+    "ds_ratio"
   ],
   "importance": {
-    "pickup_km": 17018,
-    "util": 1519,
-    "fare_gap": 3652,
-    "trip_km": 1549,
-    "cold": 122,
-    "urgent": 158,
-    "accept_rate": 1092,
-    "cf_score": 1910,
-    "rating": 1426,
-    "rush_hour": 528
+    "pickup_km": 16693,
+    "util": 1254,
+    "fare_gap": 2992,
+    "trip_km": 1466,
+    "cold": 86,
+    "urgent": 127,
+    "accept_rate": 1139,
+    "cf_score": 1261,
+    "rating": 1452,
+    "rush_hour": 704,
+    "weather": 277,
+    "ds_ratio": 728
   }
 }

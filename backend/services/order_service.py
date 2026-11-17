@@ -97,9 +97,15 @@ class OrderMixin:
         return None
 
     @staticmethod
-    def _path(o: dict) -> list[tuple[float, float]]:
-        """상차지 → 하차지 도로 경로 [(lat, lon), ...] (경로 캐시가 없으면 직선)."""
-        return geo.route(geo.geocode(o["origin"]), geo.geocode(o["destination"]))
+    def _plan_route(o: dict) -> str:
+        """화물 계획 경로를 encoded polyline 으로 만들어 저장 (등록 시 · 예전 데이터는 처음 쓸 때)."""
+        o["planned_polyline"] = geo.encode_polyline(geo.route(geo.geocode(o["origin"]), geo.geocode(o["destination"])))
+        return o["planned_polyline"]
+
+    def _path(self, o: dict) -> list[tuple[float, float]]:
+        """상차지 → 하차지 계획 경로 [(lat, lon), ...] — 화물에 저장된 planned_polyline 을 쓴다.
+        지도 · 경로 이탈 판정 · 가상 기사 시뮬레이터가 모두 이 같은 경로를 기준으로 한다."""
+        return geo.decode_polyline(o.get("planned_polyline") or self._plan_route(o))
 
     def _position(self, o: dict) -> tuple[float, float]:
         path = self._path(o)
@@ -159,11 +165,13 @@ class OrderMixin:
             "eta_minutes": minutes, "eta_clock": clock, "delay_minutes": o["delay_minutes"],
             "temp_set": o["temp_set"], "temp_now": o["temp_now"],
             "created_at": _iso(o["created_at"]), "posted_at": _iso(o["posted_at"]),
+            "pickup_at": _iso(o.get("pickup_at")),
             "assigned_at": _iso(o["assigned_at"]), "delivered_at": _iso(o["delivered_at"]),
             "period": o["delivered_at"].strftime("%Y-%m") if o["delivered_at"] else None,
             "wait_seconds": int(wait) if wait is not None else None,
             "billing": o["billing"], "billing_label": BILLING_LABEL.get(o["billing"], "-"),
             "payment": o.get("payment"),  # 모의 PG 결제 (거래번호 · 승인번호 · 상태)
+            "payout_id": o.get("payout_id"),  # 기사 수익금 송금 번호 (일괄 송금 후)
             "pod": o["pod"], "lat": lat, "lon": lon, "deviated": o["deviated"],
             "gps": {k: (o.get("gps") or {}).get(k) for k in ("dist_km", "off_count", "source")}
             if o.get("gps") else None,
@@ -232,7 +240,11 @@ class OrderMixin:
             "urgent": data.get("urgent", False), "origin": data["origin"], "destination": data["destination"],
             "price": data["price"], "shipper_id": shipper_id, "status": "MATCHING", "created_at": now,
             "temp_set": data.get("temp_set") if cold else None,
+            "pickup_at": data.get("pickup_at"),  # 상차 예약 시각 (없으면 즉시)
         })
+        if o_pickup := data.get("pickup_at"):
+            if o_pickup.tzinfo:  # 화면에서 온 시각에 시간대가 붙어 있으면 서버 현지 시각으로
+                self.orders[oid]["pickup_at"] = o_pickup.astimezone().replace(tzinfo=None)
         o = self.orders[oid]
         o.pop("seed_match", None)
         if packing:
@@ -375,16 +387,19 @@ class OrderMixin:
             o["temp_now"] = o["temp_set"]
         return self.order_view(o)
 
-    def complete_run(self, driver_id: str, order_id: str, receiver: str) -> dict:
+    def complete_run(self, driver_id: str, order_id: str, receiver: str, photo: dict | None = None) -> dict:
+        """하차 완료 · 전자인수증. 인수증 사진(파일명 · 크기 · SHA-256)이 반드시 있어야 한다 (정산 트리거 조건)."""
         o = self._get_order(order_id)
         if o["driver_id"] != driver_id or o["status"] != "IN_TRANSIT":
             raise ApiError(400, "배송 완료 처리할 수 있는 화물이 아닙니다.")
         if not receiver.strip():
             raise ApiError(400, "인수자 성함을 입력해 주세요.")
+        if not photo or not photo.get("sha256"):
+            raise ApiError(400, "인수증 사진을 첨부해 주세요. 사진 인증이 있어야 운송비를 청구할 수 있습니다.")
         now = datetime.now()
-        pod = self._make_pod(o, receiver.strip(), now)
-        self._fsm(o, "deliver", self._actor("driver", driver_id), note=f"인수자 {receiver.strip()} · 인수증 {pod['hash']}",
-                  at=now)
+        pod = self._make_pod(o, receiver.strip(), now, photo=photo)
+        self._fsm(o, "deliver", self._actor("driver", driver_id),
+                  note=f"인수자 {receiver.strip()} · 인수증 {pod['hash']} · 사진 {photo['sha256'][:12]}", at=now)
         o.update(delivered_at=now, progress=100.0, speed=0, pod=pod)
         self.drivers[driver_id]["location"] = o["destination"]
         self.drivers[driver_id]["month_runs"] += 1
@@ -460,6 +475,52 @@ class OrderMixin:
             "delayed": sum(1 for o in self.orders.values() if o["status"] == "IN_TRANSIT" and o["delay_minutes"] > 30),
             "blacklisted": sum(1 for d in self.drivers.values() if d.get("blacklisted")),
             "surge_regions": sum(1 for m in self.market_board() if m["surge_on"]),
+        }
+
+    def admin_driver_detail(self, driver_id: str) -> dict:
+        """관제 우측 상세 패널: 기사 · 연락처 / 현재 운행 / 감사 로그 / 인수증 / 리뷰를 한 번에."""
+        d = self.drivers.get(driver_id)
+        if not d:
+            raise ApiError(404, "기사를 찾을 수 없습니다.")
+        run = self._active_run_of(driver_id)
+        offer = None if run else self._pending_offer_of(driver_id)
+        done = sorted((o for o in self.orders.values() if o["driver_id"] == driver_id and o["status"] in DONE),
+                      key=lambda o: o["delivered_at"], reverse=True)
+        focus = run or offer or (done[0] if done else None)  # 감사 로그를 보여 줄 화물
+        pod_order = next((o for o in done if o["pod"]), None)
+        rating = self.driver_rating(driver_id)
+        run_view = None
+        if run:
+            v = self.order_view(run)
+            st = self.tracking.get(run["id"], {})
+            run_view = {**{k: v[k] for k in ("id", "title", "status_label", "origin", "destination", "distance_km",
+                                             "progress", "speed", "eta_clock", "eta_minutes", "delay_minutes",
+                                             "deviated", "temp_now", "temp_set", "cold_chain", "anomaly", "shipper",
+                                             "fare", "route")},
+                        "gps_live": self._gps_live(run), "dist_km": (run.get("gps") or {}).get("dist_km"),
+                        "off_count": st.get("off", 0), "pings": st.get("pings", 0),
+                        "planned_points": len(self._path(run)), "polyline_chars": len(run["planned_polyline"])}
+        return {
+            "driver": {**{k: d[k] for k in ("id", "name", "phone", "plate", "truck_type", "location", "month_runs")},
+                       "plate_type": d.get("plate_type"), "tonnage": d.get("tonnage"),
+                       "approved": d.get("approved", True), "dispatchable": self.driver_dispatchable(d),
+                       "blacklisted": bool(d.get("blacklisted")), "blacklist": d.get("blacklist"),
+                       "email": next((u["email"] for u in self.users.values() if u.get("org_id") == driver_id), None)},
+            "rating": rating,
+            "state": ("운행중" if run and run["status"] == "IN_TRANSIT" else "상차지 이동" if run
+                      else "배차 제안 응답 대기" if offer else "공차 대기"),
+            "run": run_view,
+            "offer": {"id": offer["id"], "title": offer["title"], "origin": offer["origin"],
+                      "destination": offer["destination"]} if offer else None,
+            "anomalies": [self.anomaly_view(a) for a in self.anomalies.values()
+                          if a["status"] == "UNSOLVED" and (a["driver_id"] == driver_id
+                                                            or (run and a["order_id"] == run["id"]))],
+            "audit_order": focus["id"] if focus else None,
+            "audit": self.audit_log(focus["id"])[::-1][-12:] if focus else [],
+            "pod": {"order_id": pod_order["id"], "title": pod_order["title"], **pod_order["pod"],
+                    "delivered_at": _iso(pod_order["delivered_at"])} if pod_order else None,
+            "reviews": self.list_reviews("driver", driver_id)[:5],
+            "completed": len(done),
         }
 
     def anomaly_view(self, a: dict) -> dict:

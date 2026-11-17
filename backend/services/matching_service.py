@@ -170,11 +170,14 @@ class MatchingMixin:
         return cf_score(d["location"], o["origin"], o["destination"], acc, dec)
 
     def _ml_features(self, o: dict, driver_id: str, km: float, util: float, rates: dict) -> dict:
+        mk = self._fare_est(o).get("market") or {}
         return {"pickup_km": km, "util": util, "fare_gap": self._fare_est(o)["gap_ratio"],
                 "trip_km": o["distance_km"], "cold": float(o["cold_chain"]), "urgent": float(o["urgent"]),
                 "accept_rate": rates.get(driver_id, 0.7), "cf_score": self._cf(o, driver_id),
                 "rating": self.driver_rating(driver_id)["avg"] or 4.5,
-                "rush_hour": float(pricing_engine.is_rush_hour())}
+                "rush_hour": float(pricing_engine.is_rush_hour()),
+                # 날씨 · 수급: 화물 등록 때 운임 산정에 쓴 상차 권역 값 (fare_est.market)
+                "weather": float(mk.get("weather_multiplier", 0.0)), "ds_ratio": float(mk.get("ds_ratio", 1.0))}
 
     def _combine(self, rule: float, ml: float) -> float:
         return round((1 - ML_WEIGHT) * rule + ML_WEIGHT * ml, 4)

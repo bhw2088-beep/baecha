@@ -45,6 +45,8 @@ services:
       # 컨테이너끼리는 서비스 이름(db, redis)으로 접속 (.env 의 localhost 주소를 덮어씀)
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - pod_photos:/app/backend/data/pod_photos   # 인수증 사진 (컨테이너를 다시 만들어도 유지)
     ports:
       - "8000:8000"
     depends_on:
@@ -96,3 +98,4 @@ services:
 
 volumes:
   pgdata:
+  pod_photos:

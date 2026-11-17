@@ -122,6 +122,7 @@ class DbSync:
             with get_engine().begin() as conn:  # 예전 버전 DB 에 해시 체인 컬럼 추가 (있으면 그대로)
                 conn.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS previous_hash VARCHAR(64)"))
                 conn.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS current_hash VARCHAR(64)"))
+                conn.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS planned_polyline TEXT"))
             return True
         except Exception as e:  # noqa: BLE001
             self.error = f"{type(e).__name__}: {str(e).splitlines()[0][:160]}"
@@ -143,6 +144,7 @@ class DbSync:
                            "origin": o["origin"], "destination": o["destination"],
                            "origin_geom": _point(geo.geocode(o["origin"])),
                            "dest_geom": _point(geo.geocode(o["destination"])),
+                           "planned_polyline": o.get("planned_polyline"),
                            "price": o["price"], "created_at": o["created_at"], "data": _enc(data)})
         return {
             UserRow: [{"email": u["email"], "id": u["id"], "role": u["role"], "name": u["name"],
@@ -166,6 +168,7 @@ class DbSync:
                                  "latency_ms": e["latency_ms"], "deadhead_reduction_pct": e["deadhead_reduction_pct"],
                                  "data": _enc(e)} for e in store.metrics_log],
             AppStateRow: [{"key": "settings", "value": _enc(store.settings)},
+                          {"key": "payouts", "value": {"items": _enc(store.payouts)}},
                           {"key": "settings_log", "value": {"items": _enc(store.settings_log)}},
                           {"key": "seq", "value": dict(store._seq)}],
         }
@@ -234,6 +237,7 @@ class DbSync:
             state = {r.key: r.value for r in s.scalars(select(AppStateRow))}
         store.settings = {**DEFAULT_SETTINGS, **_dec(state.get("settings", {}))}
         store.settings_log = _dec(state.get("settings_log", {}).get("items", []))
+        store.payouts = _dec(state.get("payouts", {}).get("items", []))
         store._seq = dict(state.get("seq", {}))
         self.hashes.clear()  # 다음 저장 때 전체를 한 번 비교해 맞춘다
         return True
@@ -293,6 +297,11 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, Tra
             d.setdefault("tonnage", comp.tonnage(d["truck_type"]))
         for s in self.shippers.values():
             s.setdefault("biz_check", comp.mock_business_status(s.get("biz_no")))
+        for o in self.orders.values():  # planned_polyline 도입 전 화물 → 계획 경로 채우기
+            if not o.get("planned_polyline"):
+                self._plan_route(o)
+            if o.get("pod") and not o["pod"].get("photo"):  # 사진 필수 도입 전 인수증 → 이전 방식 표시
+                o["pod"]["photo"] = {"filename": None, "size": 0, "sha256": None, "legacy": True}
         if any(not e.get("current_hash") for e in self.audit):
             rebuild_chain(self.audit)  # 해시 체인 도입 전 감사 로그 → 한 번 다시 엮는다
         self._audit_seq = max((int(e["id"].split("-")[1]) for e in self.audit), default=0)
@@ -332,6 +341,7 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, Tra
         self.reviews: dict[str, dict] = {}   # 화주-기사 상호 리뷰
         self.tracking: dict[str, dict] = {}  # 운행별 GPS 판정 상태 (이탈 연속 횟수 · 계획 ETA)
         self.metrics_log: list[dict] = []    # 매칭 라운드 성능 로그 (matching_metrics_logs)
+        self.payouts: list[dict] = []        # 기사 수익금 일괄 송금 (모의)
         self._metric_seq = 0
         self._seq: dict[str, int] = {}
         self.settings = dict(DEFAULT_SETTINGS)
@@ -462,6 +472,7 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, Tra
         o["seed_match"] = seed_match
         o["id"] = self._next_id("ORD", o["created_at"])
         o["distance_km"] = geo.road_km(o["origin"], o["destination"])
+        self._plan_route(o)  # 계획 경로(planned_polyline) 저장
         if o["cold_chain"] and o["temp_set"] is None:
             o["temp_set"] = -18.0
         if o["cold_chain"] and o["temp_now"] is None and o["status"] == "IN_TRANSIT":
@@ -475,9 +486,14 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, Tra
         return o["id"]
 
     @staticmethod
-    def _make_pod(o: dict, receiver: str, at: datetime) -> dict:
-        digest = hashlib.sha256(f"{o['id']}|{receiver}|{at.isoformat()}".encode()).hexdigest()
-        return {"receiver": receiver, "signed_at": _iso(at), "hash": "0x" + digest[:12].upper()}
+    def _make_pod(o: dict, receiver: str, at: datetime, photo: dict | None = None) -> dict:
+        """전자인수증: 인수자 · 서명 시각 · 인수증 사진(SHA-256) → 인수증 해시.
+        시드 완료 건은 사진을 받은 것으로 표시만 한다 (seed=True)."""
+        if photo is None:
+            photo = {"filename": "seed_pod.jpg", "size": 0, "seed": True,
+                     "sha256": hashlib.sha256(f"seed-photo|{o['id']}".encode()).hexdigest()}
+        digest = hashlib.sha256(f"{o['id']}|{receiver}|{at.isoformat()}|{photo['sha256']}".encode()).hexdigest()
+        return {"receiver": receiver, "signed_at": _iso(at), "hash": "0x" + digest[:12].upper(), "photo": photo}
 
     def _make_background_fleet(self) -> list[dict]:
         rng = random.Random(42)

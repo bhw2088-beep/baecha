@@ -1,5 +1,6 @@
 """화물 등록(3D 적재 품목 포함) · 운행 · 매칭 관제 요청 스키마."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -17,6 +18,8 @@ class PackItemIn(BaseModel):
     stackable: bool = True
     max_top_load: float | None = Field(None, ge=0, le=50_000)
     drop: int = Field(1, ge=1, le=9)
+    fragile: bool = False   # 파손주의 → 최상단 배치 (위에 아무것도 못 올림)
+    frozen: bool = False    # 냉동 화물 → 최상단 배치 (냉기 순환 · 결로 방지)
 
 
 class PackOptionsIn(BaseModel):
@@ -56,6 +59,7 @@ class OrderIn(BaseModel):
     urgent: bool = False
     cold_chain: bool = False
     temp_set: float | None = Field(None, ge=-30, le=10)
+    pickup_at: datetime | None = None   # 상차 예약 시각 (비우면 즉시 배차)
     # 적재 품목을 함께 보내면 서버가 같은 엔진으로 다시 계산해서 '전량 적재 가능'을 검증한 뒤 저장한다
     items: list[PackItemIn] | None = Field(None, max_length=50)
     packing_options: PackOptionsIn = PackOptionsIn()
