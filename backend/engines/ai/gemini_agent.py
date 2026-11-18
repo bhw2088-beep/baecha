@@ -1,7 +1,7 @@
 """
 Phase 5: Google Gemini 기반 능동형 AI 관제 (Function Calling)  — 키가 없으면 규칙 기반 에이전트로 대신
 
-  모델  : settings.gemini_model (기본 gemini-2.5-flash) · temperature 0.2
+  모델  : settings.gemini_model (기본 gemini-3.8-flash) · temperature 0.2 · flash 모델은 생각(thinking) 단계를 꺼서 빠르게
   도구  : 관제 데이터를 읽는 함수 + 매칭 설정을 바꾸는 함수 1개 (관리자가 명시적으로 요청했을 때만)
           → Gemini 가 필요한 함수를 골라 호출하고, 결과를 근거로 한국어로 답한다 (SDK 자동 함수 호출).
   안전  : 설정 변경은 함수 안에서 바로 적용하지 않고 '적용 대기'로 모았다가, 응답이 끝난 뒤 서버가 범위를
@@ -22,6 +22,27 @@ SYSTEM = (
     "반드시 제공된 함수로 데이터를 조회한 뒤 숫자 근거를 들어 답하고, 추측하지 않는다. "
     "조치가 필요하면 '액션 아이템' 목록으로 정리한다. 매칭 설정 변경 함수는 관리자가 명시적으로 바꾸라고 할 때만 호출한다."
 )
+
+
+CONTROL_TOWER_SYSTEM = (
+    "너는 B2B 화물 배차 플랫폼 '배차의 민족' 통합관제센터의 'AI 관제 실장'이다. 한국어로 짧고 정확하게 답한다. "
+    "너는 조회 · 요약 전용이다: 반드시 제공된 조회 함수로 데이터를 확인한 뒤 숫자 근거를 들어 답하고, 추측하지 않는다. "
+    "지역을 물으면 get_region_status 를 쓴다. 데이터에 없는 지역이면 없다고 말한다. "
+    "설정 변경(임계값 · 반경 · 제한시간 · 가중치)이나 조치(재매칭 · 보조금 · 배정) 요청에는 직접 실행할 수 없다고 말하고, "
+    "다음 위치를 안내한다: 매칭 설정은 '매칭 분석' 화면의 [자동 매칭 설정], 매칭 실패 조치는 '전국 관제 지도'의 [매칭 실패], "
+    "LightGBM 임계값은 서버 설정(ML_THRESHOLD)이라 실행 중 변경 기능이 없다. "
+    "개인 연락처는 답하지 않는다. 답은 핵심 3~6줄, 필요하면 '조치 제안' 목록을 덧붙인다. "
+    "함수는 꼭 필요한 것만 최소로(보통 1~2개) 호출한다. 인사 · 잡담에는 함수를 호출하지 말고 한두 문장으로 답한다."
+)
+MAX_TOOL_CALLS = 3      # 한 질문에 데이터 조회 최대 횟수 (조회 1번 = 구글 요청 1번 더 → 무료 분당 한도 보호)
+QUOTA_MSG = "무료 사용량(1분당 한도)을 잠시 넘었습니다. 약 1분 뒤에 다시 물어봐 주세요."
+PHONE_RE = r"01[016789][-\s]?\d{3,4}[-\s]?\d{4}"
+
+
+def _mask(text: str) -> str:
+    """도구 결과에서 전화번호를 가린다 (외부 AI API 로 개인 연락처를 보내지 않게)."""
+    import re
+    return re.sub(PHONE_RE, "010-****-****", text)
 
 
 def available(settings) -> bool:
@@ -89,14 +110,98 @@ def _tools(store, pending: list[dict]):
             get_matching_metrics, get_tuning_guide, get_driver_reputation, update_matching_settings]
 
 
-def _generate(settings, prompt: str, tools) -> str:
+def _generate(settings, prompt, tools, system: str = SYSTEM, max_calls: int | None = None) -> str:
+    """prompt: 문자열 또는 대화 목록 [{'role': 'user'|'model', 'parts': [{'text': ...}]}, ...]."""
     from google import genai
     from google.genai import types
     client = genai.Client(api_key=settings.gemini_api_key)
-    resp = client.models.generate_content(
-        model=settings.gemini_model, contents=prompt,
-        config=types.GenerateContentConfig(temperature=0.2, system_instruction=SYSTEM, tools=tools))
+
+    afc = types.AutomaticFunctionCallingConfig(maximum_remote_calls=max_calls) if max_calls else None
+
+    def run(think):
+        return client.models.generate_content(
+            model=settings.gemini_model, contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.2, system_instruction=system, tools=tools,
+                                               thinking_config=think, automatic_function_calling=afc))
+
+    # flash 모델은 답하기 전 '생각' 단계를 끈다 → 관제 질의 응답 3~6초 (켜 두면 수십 초까지 걸림, 2026-11 실측)
+    think = types.ThinkingConfig(thinking_budget=0) if "flash" in settings.gemini_model else None
+    try:
+        resp = run(think)
+    except Exception as e:  # noqa: BLE001
+        code = getattr(e, "code", None)
+        if code == 400 and think is not None:      # 이 모델이 생각 끄기를 거부 → 기본 설정으로 한 번 더
+            resp = run(None)
+        elif code in (500, 503):                   # 구글 서버 일시 과부하 → 1초 뒤 한 번 더
+            import time
+            time.sleep(1)
+            resp = run(think)
+        else:
+            raise
     return (resp.text or "").strip()
+
+
+def _fail_reason(e: Exception) -> str:
+    """Gemini 오류 → 관제 화면에 보일 짧은 사유 (키 값은 넣지 않음)."""
+    code, status = getattr(e, "code", None), getattr(e, "status", None)
+    if code == 429 or "RESOURCE_EXHAUSTED" in str(e):
+        return "429 무료 할당량 초과"
+    if code == 404:
+        return "404 모델 없음 → .env 의 GEMINI_MODEL 확인 (예: gemini-3.8-flash)"
+    if code in (400, 401, 403) and "API key" in str(e):
+        return f"{code} API 키 오류 → .env 의 GEMINI_API_KEY 확인"
+    return f"{code} {status}" if code else type(e).__name__
+
+
+def _readonly_tools(store, used: list[str]):
+    """AI 관제 실장용: 조회 함수만 (설정 변경 함수 없음) + 지역 상황. 결과는 전화번호를 가리고, 어떤 함수를 썼는지 기록."""
+    import functools
+
+    def get_region_status(region: str) -> str:
+        """지역 이름(예: '강남구', '부산', '평택', '인천항')이 들어간 화물 상태 · 30분 이상 지연 · 미조치 이상 감지 · 권역 수급."""
+        return json.dumps(rule_agent.region_status(store, region), ensure_ascii=False, default=str)
+
+    base = [t for t in _tools(store, []) if t.__name__ != "update_matching_settings"] + [get_region_status]
+
+    def wrap(fn):
+        @functools.wraps(fn)
+        def inner(*args, **kwargs):
+            used.append(fn.__name__)
+            for _ in range(2):          # 다른 요청이 데이터를 바꾸는 순간이면 한 번 더 (dict 크기 변경)
+                try:
+                    return _mask(fn(*args, **kwargs))
+                except RuntimeError:
+                    continue
+            return "조회 실패 (잠시 후 다시)"
+        return inner
+
+    return [wrap(t) for t in base]
+
+
+def control_tower(store, settings, command: str, history: list[dict] | None = None) -> dict:
+    """AI 관제 실장 (POST /api/v1/ai/control-tower): 조회 · 요약 전용 자연어 질의.
+    history: 이전 대화 [{'role': 'user'|'assistant', 'text': ...}] (최근 6개만). 설정은 절대 바꾸지 않는다.
+    Gemini 키가 없거나 호출이 실패하면(할당량 초과 포함) 규칙 기반 답으로 대신한다."""
+    if not available(settings):
+        return {**rule_agent.answer_readonly(store, command), "tools": [], "fallback": "GEMINI_API_KEY 없음 → 규칙 기반"}
+    contents = [{"role": "model" if h.get("role") == "assistant" else "user", "parts": [{"text": str(h.get("text", ""))[:2000]}]}
+                for h in (history or [])[-6:] if h.get("text")]
+    contents.append({"role": "user", "parts": [{"text": command}]})
+    used: list[str] = []
+    try:
+        answer = _generate(settings, contents, _readonly_tools(store, used), system=CONTROL_TOWER_SYSTEM,
+                           max_calls=MAX_TOOL_CALLS)
+    except Exception as e:  # noqa: BLE001
+        reason = _fail_reason(e)
+        if reason.startswith("429"):            # 분당 한도: 엉뚱한 요약 대신 '잠시 뒤 다시'를 분명히
+            return {"engine": f"Gemini {settings.gemini_model}", "answer": QUOTA_MSG, "tools": used,
+                    "fallback": "429 무료 할당량(분당) 초과", "quota": True}
+        return {**rule_agent.answer_readonly(store, command), "tools": [],      # 키 오류 · 모델 없음 · 네트워크 → 규칙 기반
+                "fallback": f"Gemini 호출 실패 ({reason}) → 규칙 기반"}
+    if not answer:                              # 조회 횟수 한도에서 멈춰 답 문장이 없으면 규칙 기반으로
+        return {**rule_agent.answer_readonly(store, command), "tools": used,
+                "fallback": f"Gemini 답 없음 (조회 {len(used)}회 · 한도 {MAX_TOOL_CALLS}) → 규칙 기반"}
+    return {"engine": f"Gemini {settings.gemini_model}", "answer": _mask(answer), "tools": used}
 
 
 def ask(store, settings, text: str) -> dict:

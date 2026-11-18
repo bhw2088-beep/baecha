@@ -13,7 +13,7 @@ from ...core.database import store
 from ...core.errors import ApiError
 from ...core.redis_client import available as redis_available, get_redis
 from ...core.security import current_user, require
-from ...schemas.matching_schema import AskIn, PingBatchIn, PingIn
+from ...schemas.matching_schema import AskIn, LocationBatchIn, LocationIn, PingBatchIn, PingIn
 from ...workers import gps_stream_worker
 
 router = APIRouter(tags=["tracking"])
@@ -169,6 +169,25 @@ async def ping_batch(body: PingBatchIn):
             rejected.append({"order_id": p.order_id, "status": e.status, "detail": e.detail})
     queued = await _enqueue(ok) if ok else False
     return {"accepted": len(ok), "rejected": rejected, "queued": queued}
+
+
+# ------------------------------------------------------------------ 공차 기사 실시간 위치 (텔레메트리)
+@router.post("/tracking/location", status_code=202)
+async def report_location(body: LocationIn, user: dict = Depends(current_user)):
+    """기사 앱: 공차(배차 대기) 중 현재 위치 보고 → 매칭 거리 · PostGIS 반경 필터 · 관제 지도에 반영."""
+    if user["role"] != "driver":
+        raise HTTPException(status_code=403, detail="차주만 위치를 보고할 수 있습니다.")
+    return {"result": store.report_location(user["org_id"], body.lat, body.lon, body.speed)}
+
+
+@router.post("/tracking/location/batch", dependencies=[Depends(_sim_key)], status_code=202, include_in_schema=False)
+async def report_location_batch(body: LocationBatchIn):
+    """텔레메트리 시뮬레이터 전용: 공차 기사 여러 명의 위치를 한 번에 (X-Sim-Key)."""
+    counts: dict[str, int] = {}
+    for loc in body.locations:
+        r = store.report_location(loc.driver_id or "", loc.lat, loc.lon, loc.speed)
+        counts[r] = counts.get(r, 0) + 1
+    return counts
 
 
 @router.get("/admin/drivers/{driver_id}/detail", dependencies=[Admin])

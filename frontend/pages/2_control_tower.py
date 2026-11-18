@@ -15,6 +15,55 @@ TYPE_LABEL = {"ALL": "전체 유형", "COLD": "온도 이상", "STAGNATION": "�
 
 # ======================================================================= 전국 관제 지도
 SEV = {"HIGH": ("긴급", "red"), "MEDIUM": ("주의", "amber"), "LOW": ("참고", "blue")}
+AI_TIMEOUT = 60          # Gemini 응답은 수 초 ~ 수십 초 → 이 호출만 기본(5초)보다 길게 기다린다
+AI_EXAMPLES = ["전체 현황 요약해줘", "30분 이상 지연된 운행 요약해줘", "매칭 실패 원인 알려줘", "부산 상황 알려줘"]
+
+
+def _md_safe(text: str) -> str:
+    """AI 답을 마크다운으로 보일 때: '5~10%' 의 ~ 두 개가 취소선, '$' 두 개가 수식으로 바뀌지 않게."""
+    return (text or "").replace("~", "\\~").replace("$", "\\$")
+
+
+def ai_chat(b: dict):
+    """AI 관제 실장 (조회 · 요약 전용): POST /ai/control-tower · 대화 기록은 이 브라우저 세션에만 · 3초 자동 갱신 영역 밖."""
+    log = st.session_state.setdefault("ai_chat", [])
+    engine = f"Gemini {b.get('llm_model')}" if b.get("llm") else "규칙 기반 (GEMINI_API_KEY 없음)"
+    top = st.columns([3, 1], vertical_alignment="center")
+    top[0].caption(f"AI 관제 실장 · {engine} · 현황 조회 · 요약만 합니다 (설정 변경 · 조치는 직접)")
+    if log and top[1].button("대화 지우기", key="ai_clear", width="stretch"):
+        st.session_state.ai_chat = []
+        st.rerun()
+    for m in log[-12:]:
+        with st.chat_message("user" if m["role"] == "user" else "assistant",
+                             avatar=":material/person:" if m["role"] == "user" else ":material/smart_toy:"):
+            st.markdown(_md_safe(m["text"]))
+            if m.get("meta"):
+                st.caption(m["meta"])
+    picked = None
+    if not log:                                           # 처음엔 예시 질문 버튼
+        cols = st.columns(len(AI_EXAMPLES))
+        for i, q in enumerate(AI_EXAMPLES):
+            if cols[i].button(q, key=f"ai_ex_{i}", width="stretch"):
+                picked = q
+    prompt = st.chat_input("AI 관제 실장에게 물어보세요 (예: 강남구 지연 상황 요약해줘)", key="ai_input", max_chars=500)
+    question = prompt or picked
+    if not question:
+        st.divider()
+        return
+    history = [{"role": m["role"], "text": m["text"]} for m in log[-6:]]
+    log.append({"role": "user", "text": question})
+    with st.spinner("AI 관제 실장이 관제 데이터를 확인하는 중..."):
+        try:
+            r = api.post("/ai/control-tower", {"command": question, "history": history}, timeout=AI_TIMEOUT)
+            meta = r.get("engine", "")
+            if r.get("tools"):
+                meta += " · 조회: " + ", ".join(dict.fromkeys(r["tools"]))
+            if r.get("fallback"):
+                meta += f" · {r['fallback']}"
+            log.append({"role": "assistant", "text": r.get("answer") or "(빈 응답)", "meta": meta})
+        except api.ApiError as e:
+            log.append({"role": "assistant", "text": f"답을 받지 못했습니다: {e}", "meta": "오류"})
+    st.rerun()                                            # 방금 대화를 위쪽 기록으로 다시 그림
 
 
 def agent_panel():
@@ -26,7 +75,9 @@ def agent_panel():
         return
     c = b["counts"]
     head = f"AI 관제 브리핑 · 긴급 {c['HIGH']} · 주의 {c['MEDIUM']} · 참고 {c['LOW']}"
-    with st.expander(head, icon=":material/smart_toy:", expanded=c["HIGH"] > 0):
+    # 대화 중이면 펼친 채로 (제목의 건수가 바뀌어도 질문 후 칸이 접히지 않게)
+    with st.expander(head, icon=":material/smart_toy:", expanded=c["HIGH"] > 0 or bool(st.session_state.get("ai_chat"))):
+        ai_chat(b)
         st.caption(f"{ui.dt_text(b['generated_at'], '%H:%M:%S')} 기준")
         ui.html(f'<div class="ct-card"><b>{b["summary"]}</b></div>')
         for n, i in enumerate(b["insights"][:8]):

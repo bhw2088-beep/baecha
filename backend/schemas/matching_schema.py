@@ -17,6 +17,18 @@ class PingBatchIn(BaseModel):
     pings: list[PingIn] = Field(max_length=500)
 
 
+class LocationIn(BaseModel):
+    """공차 기사 실시간 위치 (POST /tracking/location). 기사 앱은 토큰으로, 텔레메트리 시뮬레이터는 batch + X-Sim-Key."""
+    lat: float = Field(ge=33.0, le=39.0)
+    lon: float = Field(ge=124.0, le=132.0)
+    speed: float = Field(0, ge=0, le=200)
+    driver_id: str | None = None           # batch 전용
+
+
+class LocationBatchIn(BaseModel):
+    locations: list[LocationIn] = Field(max_length=2000)
+
+
 class RoundLogOut(BaseModel):
     """matching_metrics_logs 한 줄 (배정 라운드)."""
     id: str

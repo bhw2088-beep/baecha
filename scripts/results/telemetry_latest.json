@@ -1,0 +1,174 @@
+{
+  "started": "2026-11-18 11:57:17",
+  "elapsed_sec": 300.3,
+  "mode": "서버 연동",
+  "drivers": 100,
+  "options": {
+    "drivers": 100,
+    "minutes": 5,
+    "order_rate": 0.5,
+    "accept_rate": 0.9,
+    "time_scale": 60,
+    "tick": 1.0,
+    "seed": 7,
+    "no_server": false,
+    "keep": false
+  },
+  "stats": {
+    "telemetry": 27800,
+    "orders": 132,
+    "orders_ok": 132,
+    "orders_fail": 0,
+    "offers": 124,
+    "accepted": 108,
+    "declined": 16,
+    "completed": 41,
+    "pings": 12263,
+    "pings_ok": 12263,
+    "locations": 15491
+  },
+  "telemetry_per_sec": 92.6,
+  "final_status": {
+    "공차": 33,
+    "제안 대기": 0,
+    "적재(운행)": 67,
+    "하차 처리": 0
+  },
+  "by_tonnage": {
+    "1톤": 13,
+    "2.5톤": 23,
+    "5톤": 39,
+    "11톤": 20,
+    "25톤": 5
+  },
+  "order_to_offer_sec": {
+    "count": 103,
+    "p50": 0.74,
+    "p95": 42.77
+  },
+  "server_latency": {
+    "제안 확인": {
+      "count": 278,
+      "avg_ms": 171.0,
+      "p50_ms": 84.8,
+      "p95_ms": 612.5,
+      "p99_ms": 1100.0,
+      "max_ms": 1492.8
+    },
+    "공차 위치": {
+      "count": 278,
+      "avg_ms": 271.9,
+      "p50_ms": 140.3,
+      "p95_ms": 811.8,
+      "p99_ms": 1501.3,
+      "max_ms": 2654.1
+    },
+    "수락": {
+      "count": 108,
+      "avg_ms": 220.4,
+      "p50_ms": 120.7,
+      "p95_ms": 816.8,
+      "p99_ms": 1069.4,
+      "max_ms": 1114.9
+    },
+    "운행 시작": {
+      "count": 108,
+      "avg_ms": 217.0,
+      "p50_ms": 112.8,
+      "p95_ms": 739.5,
+      "p99_ms": 1218.3,
+      "max_ms": 1420.6
+    },
+    "거절": {
+      "count": 16,
+      "avg_ms": 262.8,
+      "p50_ms": 230.3,
+      "p95_ms": 407.2,
+      "p99_ms": 1222.4,
+      "max_ms": 1222.4
+    },
+    "운임 추정": {
+      "count": 132,
+      "avg_ms": 333.3,
+      "p50_ms": 286.2,
+      "p95_ms": 747.2,
+      "p99_ms": 988.7,
+      "max_ms": 1195.8
+    },
+    "GPS 핑": {
+      "count": 12263,
+      "avg_ms": 229.4,
+      "p50_ms": 122.5,
+      "p95_ms": 816.7,
+      "p99_ms": 1637.9,
+      "max_ms": 2390.3
+    },
+    "주문 등록": {
+      "count": 132,
+      "avg_ms": 466.2,
+      "p50_ms": 330.2,
+      "p95_ms": 1391.6,
+      "p99_ms": 1812.6,
+      "max_ms": 1988.0
+    },
+    "하차 완료": {
+      "count": 41,
+      "avg_ms": 401.7,
+      "p50_ms": 332.1,
+      "p95_ms": 876.0,
+      "p99_ms": 1313.2,
+      "max_ms": 1313.2
+    }
+  },
+  "server_errors": {},
+  "sample_packets": {
+    "telemetry": [
+      {
+        "type": "TELEMETRY",
+        "ts": "12:02:16",
+        "driver_id": "D-069",
+        "truck_type": "1톤 카고",
+        "tonnage": 1.0,
+        "status": "LOADED",
+        "lat": 36.667163,
+        "lon": 128.130795,
+        "speed_kmh": 55.7,
+        "order_id": "ORD-20261118-119"
+      },
+      {
+        "type": "TELEMETRY",
+        "ts": "12:02:16",
+        "driver_id": "D-103",
+        "truck_type": "5톤 윙바디",
+        "tonnage": 5.0,
+        "status": "LOADED",
+        "lat": 35.367924,
+        "lon": 128.85334,
+        "speed_kmh": 84.5,
+        "order_id": "ORD-20261118-35"
+      }
+    ],
+    "order_request": [
+      {
+        "type": "ORDER_REQUEST",
+        "ts": "12:02:08",
+        "truck_type": "5톤 윙바디",
+        "need_tons": 5.0,
+        "cold_chain": false,
+        "origin": "인천 남동구 남동공단",
+        "destination": "부산 사상구",
+        "price": 1145000
+      },
+      {
+        "type": "ORDER_REQUEST",
+        "ts": "12:02:13",
+        "truck_type": "5톤 윙바디",
+        "need_tons": 5.0,
+        "cold_chain": false,
+        "origin": "서울 중구",
+        "destination": "울산 울주군 삼남",
+        "price": 1120000
+      }
+    ]
+  }
+}

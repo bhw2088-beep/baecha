@@ -33,6 +33,19 @@ def _near(lat: float, lon: float) -> str:
 
 
 class TrackingMixin:
+    # ------------------------------------------------------------------ 공차 기사 실시간 위치 (텔레메트리)
+    def report_location(self, driver_id: str, lat: float, lon: float, speed: float = 0) -> str:
+        """공차(운행 중 아님) 기사의 현재 위치 보고 → 매칭 거리 · PostGIS 반경 · 관제 지도에 반영.
+        운행 중이면 무시 ('in_run' — 운행 위치는 GPS 핑 /tracking/ping 이 담당). 결과: 'ok' · 'in_run' · 'unknown'."""
+        import time as _time
+        d = self.drivers.get(driver_id)
+        if not d:
+            return "unknown"
+        if self._active_run_of(driver_id):
+            return "in_run"
+        d["live"] = {"lat": round(lat, 6), "lon": round(lon, 6), "speed": round(speed, 1), "t": round(_time.time(), 1)}
+        return "ok"
+
     # ------------------------------------------------------------------ 입구: 핑 검증 (API)
     def check_ping(self, order_id: str, driver_id: str | None, source: str = "driver_app") -> dict:
         """POST /tracking/ping 앞단 검증. 배정 기사가 아니면 재위탁 의심으로 기록하고 403."""

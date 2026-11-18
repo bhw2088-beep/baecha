@@ -248,6 +248,137 @@ def incident_report(store, anomaly_id: str) -> dict:
 
 
 # ------------------------------------------------------------------ 자연어 명령 (규칙 · Gemini 대체)
+# ------------------------------------------------------------------ AI 관제 실장 (조회 · 요약 전용)
+REGION_RE = r"([가-힣]{2,}(?:구|시|군|동|읍|면|항))"
+CHANGE_VERBS = ("바꿔", "변경", "올려", "내려", "낮춰", "높여", "조정", "적용", "설정해", "늘려", "줄여")
+CHANGE_TARGETS = ("임계", "반경", "가중", "제한시간", "타임아웃", "설정", "운임", "인센티브", "보조금", "재매칭", "배정")
+
+
+def wants_change(text: str) -> bool:
+    """설정 변경 · 조치 요청인가 (AI 관제 실장은 조회 · 요약 전용이라 이런 요청은 실행하지 않고 안내만)."""
+    import re
+    t = text.strip()
+    return (any(v in t for v in CHANGE_VERBS) and any(k in t for k in CHANGE_TARGETS)) or \
+        (any(k in t for k in ("반경", "임계")) and re.search(r"\d", t) is not None)
+
+
+READONLY_GUIDE = ("AI 관제 실장은 현황 조회 · 요약만 합니다. 설정 변경이나 조치는 직접 해 주세요 — "
+                  "매칭 설정(반경 · 수락 제한시간 · 거리 가중치): '매칭 분석' 화면의 [자동 매칭 설정] · "
+                  "매칭 실패 화물 재매칭 · 보조금: '전국 관제 지도'의 [매칭 실패] · "
+                  "LightGBM 임계값: 서버 설정(ML_THRESHOLD, 현재 {th}) — 실행 중 변경 기능은 없습니다.")
+
+
+def region_status(store, keyword: str) -> dict:
+    """지역 이름(예: '강남구', '부산', '평택')이 들어간 화물 · 지연 · 이상 감지 · 수급 요약 (조회 전용)."""
+    from ..matcher import spatial as geo
+    from ..pricing_engine import region_of
+    k = (keyword or "").strip()
+    for tail in ("지역", "쪽", "일대", "근처", "상황"):
+        k = k.removesuffix(tail).strip()
+    if len(k) < 2:
+        return {"keyword": keyword, "found": False, "note": "지역 이름을 2글자 이상으로 알려 주세요."}
+    hit = [o for o in store.orders.values() if k in (o["origin"] or "") or k in (o["destination"] or "")]
+    active = [o for o in hit if o["status"] in ("MATCHING", "ASSIGNED", "IN_TRANSIT")]
+    delayed = [{"id": o["id"], "title": o["title"], "route": f"{o['origin']} → {o['destination']}",
+                "delay_minutes": o["delay_minutes"]}
+               for o in active if o["status"] == "IN_TRANSIT" and o.get("delay_minutes", 0) >= 30]
+    anomalies = [{"type": a["type_label"], "text": a["text"], "location": a.get("location")}
+                 for a in store.list_anomalies("ALL", "UNSOLVED")
+                 if k in str(a.get("location") or "") or k in str(a.get("text") or "")
+                 or any(k in (o["origin"] + o["destination"]) for o in hit if o["id"] == a.get("order_id"))]
+    market = [{"region": m["region"], "ds_ratio": m["ds_ratio"], "surge": m["surge"], "weather": m["weather"]["label"]}
+              for m in store.market_board() if m["region"] == region_of(k) or m["region"] == k[:2]]
+    if not hit and not market:
+        return {"keyword": k, "found": False,
+                "note": f"'{k}' 이(가) 들어간 상차지 · 하차지가 없습니다 (등록 지역 목록에 없거나 해당 화물이 없음).",
+                "known_regions_sample": geo.region_options()[:12]}
+    from ...models.order import STATUS_LABEL
+    status: dict[str, int] = {}
+    for o in hit:
+        label = STATUS_LABEL.get(o["status"], o["status"])
+        status[label] = status.get(label, 0) + 1
+    return {"keyword": k, "found": True, "regions": sorted({o["origin"] for o in hit if k in o["origin"]}
+                                                           | {o["destination"] for o in hit if k in o["destination"]})[:10],
+            "orders_by_status": status, "active": len(active), "delayed_30min": delayed[:10],
+            "open_anomalies": anomalies[:10], "market": market}
+
+
+def answer_readonly(store, text: str) -> dict:
+    """AI 관제 실장의 규칙 기반 답 (Gemini 키가 없거나 실패할 때). 설정을 절대 바꾸지 않는다."""
+    import re
+    from ...config import ML_THRESHOLD
+    t = text.strip()
+    if wants_change(t):
+        return {"engine": "rule-based", "answer": READONLY_GUIDE.format(th=ML_THRESHOLD), "data": None, "readonly": True}
+    m = re.search(REGION_RE, t)
+    place = m.group(1) if m else None
+    if not place:                      # '부산' · '평택' 처럼 구 · 시가 안 붙은 이름: 등록 지역 · 거점 이름에 들어 있으면 지역으로 본다
+        from ..matcher import spatial as geo
+        names = geo.region_options() + list(geo.HUBS)
+        place = next((w for w in re.findall(r"[가-힣]{2,}", t) if any(w in n for n in names)), None)
+    if place and any(w in t for w in ("상황", "요약", "지연", "현황", "어때", "알려")):
+        r = region_status(store, place)
+        if not r["found"]:
+            return {"engine": "rule-based", "answer": r["note"] + " 예: " + ", ".join(r.get("known_regions_sample", [])[:5]),
+                    "data": r}
+        st = " · ".join(f"{k} {v}" for k, v in r["orders_by_status"].items())
+        ans = (f"{r['keyword']} 관련 화물 {sum(r['orders_by_status'].values())}건 ({st}) · 진행 중 {r['active']}건 · "
+               f"30분 이상 지연 {len(r['delayed_30min'])}건 · 미조치 이상 {len(r['open_anomalies'])}건")
+        if r["delayed_30min"]:
+            ans += " — 지연: " + "; ".join(f"{d['id']} +{d['delay_minutes']}분" for d in r["delayed_30min"][:5])
+        return {"engine": "rule-based", "answer": ans, "data": r}
+    extra = _quick_answer(store, t)
+    if extra:
+        return extra
+    if any(k in t for k in KNOWN_KEYWORDS):
+        return handle_command(store, t)   # wants_change 가 아니면 handle_command 는 조회 분기만 탄다
+    if any(k in t for k in ("요약", "현황", "전체", "브리핑", "상황", "어때")):
+        b = briefing(store)
+        return {"engine": "rule-based", "answer": b["summary"], "data": b["counts"]}
+    return {"engine": "rule-based", "data": None, "understood": False,
+            "answer": "규칙 기반으로는 이 질문을 이해하지 못했습니다. 이렇게 물어보세요: " + " · ".join(f"'{q}'" for q in EXAMPLES)}
+
+
+KNOWN_KEYWORDS = ("실패", "지연", "이탈", "재위탁", "이상", "수급", "서지", "날씨", "임계", "가중치", "튜닝",
+                  "블랙", "평점", "리뷰")
+EXAMPLES = ("전체 현황 요약해줘", "운행 중인 차량 몇 대야?", "오늘 배차 몇 건이야?", "30분 이상 지연된 운행",
+            "매칭 실패 원인", "부산 상황 알려줘", "냉동차 상황", "KPI 알려줘", "가장 바쁜 기사")
+
+
+def _quick_answer(store, t: str) -> dict | None:
+    """자주 나오는 질문 (규칙 기반): 인사 · 차량 수 · 오늘 배차 · 냉동차 · KPI · 기사 현황. 해당 없으면 None."""
+    low = t.lower()
+    r = lambda ans, data=None: {"engine": "rule-based", "answer": ans, "data": data}  # noqa: E731
+    if len(t) <= 12 and any(k in low for k in ("안녕", "하이", "hello", "hi", "반가", "누구")):
+        return r("안녕하세요, AI 관제 실장입니다. 관제 현황을 조회 · 요약해 드려요. 예: " + " · ".join(f"'{q}'" for q in EXAMPLES[:4]))
+    if "kpi" in low or "지표" in t or "성과" in t:
+        k = store.kpi_scorecard()
+        rows = [f"{x['name']} {x['display']}({x['status_label']})" for x in k["rows"] if x["status"] != "none"]
+        return r(f"KPI {k['summary']['pass']}/{k['summary']['measured']}개 달성: " + " · ".join(rows), k["summary"])
+    if any(k in t for k in ("냉동", "냉장", "콜드", "온도")):
+        s = store.admin_summary()
+        cold = [a for a in store.list_anomalies("COLD", "UNSOLVED")]
+        ans = f"콜드체인 운행 {s['cold']}대 · 미조치 온도 이상 {len(cold)}건"
+        if cold:
+            ans += " — " + "; ".join(f"{a['plate']} {a['text']}" for a in cold[:4])
+        return r(ans, {"cold": s["cold"], "anomalies": len(cold)})
+    if "기사" in t and any(k in t for k in ("바쁜", "많이", "순위", "누가", "누구", "현황", "몇")):
+        busy = sorted(store.drivers.values(), key=lambda d: -d.get("month_runs", 0))[:5]
+        running = sum(1 for d in store.drivers.values() if store._active_run_of(d["id"]))
+        ans = (f"등록 기사 {len(store.drivers)}명 · 지금 운행 중 {running}명. 이번 달 운행 많은 순: "
+               + " · ".join(f"{d['name']} {d.get('month_runs', 0)}회" for d in busy))
+        return r(ans)
+    if any(k in t for k in ("차량", "몇 대", "몇대", "운행 중", "운행중", "공차")):
+        s = store.admin_summary()
+        return r(f"네트워크 차량 {s['vehicles']}대 · 운행 중 {s['in_transit']}대 (콜드체인 {s['cold']}) · 공차 대기 {s['empty']}대 · "
+                 f"평균 속도 {s['avg_speed']}km/h · GPS 수신 {s['gps_live']}대", s)
+    if any(k in t for k in ("배차", "주문", "화물", "몇 건", "몇건", "건수")):
+        s, p = store.admin_summary(), store.public_stats()
+        return r(f"오늘 등록 화물 {p['orders_today']}건 · 자동 매칭 진행 {s['matching']}건 (기사 응답 대기 {s['offers_pending']}) · "
+                 f"매칭 실패 {s['failed_matches']}건 · 운행 중 {s['in_transit']}대", {**s, **p})
+    return None
+
+
 def handle_command(store, text: str) -> dict:
     """키워드 규칙으로 관제 명령을 처리한다. 예) '매칭 실패 보여줘', '지연 차량', '반경 70km로', '수급', '임계값'."""
     import re

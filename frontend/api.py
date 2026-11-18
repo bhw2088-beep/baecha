@@ -18,13 +18,16 @@ class ApiError(Exception):
         self.status = status
 
 
-def _request(method: str, path: str, *, raw: bool = False, **kwargs):
+def _request(method: str, path: str, *, raw: bool = False, timeout: float = TIMEOUT, **kwargs):
+    """timeout: 기본 5초. AI 관제 실장처럼 외부 AI 응답을 기다리는 호출만 길게 준다."""
     headers = kwargs.pop("headers", {})
     token = st.session_state.get("token")
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        resp = requests.request(method, f"{API_BASE}{path}", headers=headers, timeout=TIMEOUT, **kwargs)
+        resp = requests.request(method, f"{API_BASE}{path}", headers=headers, timeout=timeout, **kwargs)
+    except requests.Timeout:
+        raise ApiError(f"응답이 {timeout:.0f}초 안에 오지 않았습니다. 잠시 후 다시 시도해 주세요.")
     except requests.RequestException:
         raise ApiError(f"API 서버({API_BASE})에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.")
     if resp.status_code == 401 and token:

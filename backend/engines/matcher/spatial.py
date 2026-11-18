@@ -127,6 +127,19 @@ CORRIDORS = [
 ]
 
 
+# 공차 기사의 실시간 위치 (POST /tracking/location) 를 이 시간 동안만 믿는다 — 끊기면 등록 지역(location)으로 돌아감
+LIVE_TTL_SEC = 600
+
+
+def driver_point(d: dict) -> tuple[float, float]:
+    """기사 대기 위치: 최근에 보고한 실시간 위치(공차 텔레메트리)가 있으면 그 좌표, 없으면 등록 지역 좌표.
+    매칭 거리 · PostGIS 반경 필터(drivers.geom) · 관제 지도가 모두 이 함수를 쓴다."""
+    live = d.get("live")
+    if live and time.time() - live.get("t", 0) <= LIVE_TTL_SEC:
+        return live["lat"], live["lon"]
+    return geocode(d["location"])
+
+
 def geocode(address: str) -> tuple[float, float]:
     """주소 → 좌표.
     1) 드롭다운 주소면 그대로  2) 단어 '앞부분'이 키워드인 것 중 가장 뒤 단어(가장 구체적인 지역), 같으면 긴 키워드

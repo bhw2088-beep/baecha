@@ -152,7 +152,7 @@ class DbSync:
                       for u in store.users.values()],
             ShipperRow: [{"id": s["id"], "name": s["name"], "data": _enc(s)} for s in store.shippers.values()],
             DriverRow: [{"id": d["id"], "name": d["name"], "truck_type": d["truck_type"], "location": d["location"],
-                         "geom": _point(geo.geocode(d["location"])), "month_runs": d["month_runs"],
+                         "geom": _point(geo.driver_point(d)), "month_runs": d["month_runs"],   # 실시간 공차 위치 반영
                          "data": _enc(d)} for d in store.drivers.values()],
             AuthTokenRow: [{"token": t, "email": e} for t, e in store.tokens.items()],
             OrderRow: orders,

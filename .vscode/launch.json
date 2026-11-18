@@ -23,6 +23,25 @@
             "justMyCode": true
         },
         {
+            "name": "텔레메트리 시뮬레이터 (기사 100명 · 5분 · 서버 연동)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/telemetry.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "텔레메트리 시뮬레이터 (패킷만 · 서버 없이)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/telemetry.py",
+            "args": ["--no-server"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
             "name": "8k ① KPI 측정 (시드 7 · 약 6~8분)",
             "type": "debugpy",
             "request": "launch",

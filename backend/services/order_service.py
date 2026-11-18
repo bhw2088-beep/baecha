@@ -238,7 +238,7 @@ class OrderMixin:
 
     def _driver_coord(self, d: dict) -> tuple[float, float]:
         run = self._active_run_of(d["id"])
-        return self._position(run) if run else geo.geocode(d["location"])
+        return self._position(run) if run else geo.driver_point(d)   # 공차면 실시간 위치(있으면) · 없으면 등록 지역
 
     # ------------------------------------------------------------------ public
     def public_stats(self) -> dict:
@@ -430,6 +430,7 @@ class OrderMixin:
                   note=f"인수자 {receiver.strip()} · 인수증 {pod['hash']} · 사진 {photo['sha256'][:12]}", at=now)
         o.update(delivered_at=now, progress=100.0, speed=0, pod=pod)
         self.drivers[driver_id]["location"] = o["destination"]
+        self.drivers[driver_id].pop("live", None)   # 하차지에서 새로 시작 (다음 위치 보고부터 실시간 위치)
         self.drivers[driver_id]["month_runs"] += 1
         for a in self.anomalies.values():
             if a["order_id"] == order_id and a["status"] == "UNSOLVED":
