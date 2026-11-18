@@ -282,7 +282,7 @@ def run_panel(order_id: str):
     with left:
         render_order_detail(o, show_map=False)
     with right:
-        ui.route_map(o, height=300)
+        ui.route_map(o, height=300, glide_ms=4000)
 
 
 def run_actions(o: dict):

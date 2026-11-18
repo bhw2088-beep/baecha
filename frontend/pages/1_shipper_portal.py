@@ -112,11 +112,11 @@ def dispatch():
     rows = event.selection.rows
     selected_id = orders[rows[0]]["id"] if rows and rows[0] < len(orders) else orders[0]["id"]
     st.write("")
-    ui.section("실시간 상세", "4초마다 자동 갱신")
+    ui.section("실시간 상세", "2초마다 자동 갱신")
     order_live_panel(selected_id)
 
 
-@st.fragment(run_every="5s")
+@st.fragment(run_every="2s")
 def fleet_map_panel():
     try:
         orders = api.get("/shipper/orders")
@@ -131,7 +131,7 @@ def _short(addr: str) -> str:
     return " ".join(parts[:2]) if len(parts) > 1 else addr
 
 
-@st.fragment(run_every="4s")
+@st.fragment(run_every="2s")
 def order_live_panel(order_id: str):
     try:
         o = api.get(f"/orders/{order_id}")
@@ -264,78 +264,94 @@ def history():
     if not items:
         st.info("조건에 맞는 운송 이력이 없습니다.")
         return
+    # 한 화면에 들어가게: 열 8개 · '진행'은 청구 상태만 짧게 (이력은 모두 운송이 끝난 건) · 차주는 이름만
+    # (번호판 · 전체 주소 · 상차 거리 · 인보이스 · 전자인수증은 행을 클릭하면 뜨는 창에)
+    progress = {"UNBILLED": "차주 청구 대기", "REQUESTED": "결제 필요", "PAID": "입금 완료", "REFUNDED": "결제 취소"}
     df = pd.DataFrame([{
-        "화물 ID": i["id"], "완료일": ui.dt_text(i["delivered_at"], "%Y.%m.%d"), "화물": i["title"],
-        "구간": f"{_short(i['origin'])} → {_short(i['destination'])}",
-        "차주": f"{i['driver']['name']} · {i['driver']['plate']}" if i["driver"] else "-",
-        "최종 운임": i["total_fee"], "상태": i["status_label"], "청구": i["billing_label"],
+        "화물 ID": i["id"], "완료일": ui.dt_text(i["delivered_at"], "%m.%d"), "화물": i["title"],
+        "구간": f"{_short(i['origin'])}→{_short(i['destination'])}",
+        "차주": i["driver"]["name"] if i["driver"] else "-",
+        "운임": i["total_fee"], "진행": progress.get(i["billing"], i["billing_label"]),
         "내 평가": ui.star_bar((i.get("review") or {}).get("by_shipper")),
-        "상차 거리": i["match"]["pickup_km"] if i["match"] else None,
     } for i in items])
-    event = st.dataframe(df, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row",
-                         key="history_table", column_config={
-        "화물 ID": st.column_config.TextColumn(width=130), "완료일": st.column_config.TextColumn(width=85),
-        "화물": st.column_config.TextColumn(width=200), "구간": st.column_config.TextColumn(width=190),
-        "차주": st.column_config.TextColumn(width=150), "최종 운임": st.column_config.NumberColumn(format="%,d원", width=95),
-        "상태": st.column_config.TextColumn(width=70), "청구": st.column_config.TextColumn(width=70),
-        "내 평가": st.column_config.TextColumn(width=85, help="이 운송에 내가 남긴 기사 별점 · 위 '상호 평가'에서 등록"),
-        "상차 거리": st.column_config.NumberColumn(format="%.0fkm", width=75,
-                                                 help="배차 당시 기사 위치 → 상차지 거리 (자동 매칭 기록)")})
-    rows = event.selection.rows
-    if not rows or rows[0] >= len(items):
-        st.caption("행을 선택하면 전자인수증 확인 · 청구서 승인을 할 수 있습니다.")
-        return
-    item = items[rows[0]]
-    _history_actions(item)
+    # 체크 네모 없이 행의 아무 칸이나 한 번 클릭 → 그 운송의 인보이스 · 전자인수증 창
+    # (Streamlit 표는 더블클릭을 알 수 없어서 '칸 클릭(single-cell)'으로 연다)
+    event = st.dataframe(df, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-cell",
+                         key="history_table", height=38 + 35 * min(len(df), 15),    # 행 수만큼 (최대 15행)
+                         column_config={
+        "화물 ID": st.column_config.TextColumn(width=125), "완료일": st.column_config.TextColumn(width=48),
+        "화물": st.column_config.TextColumn(width=138), "구간": st.column_config.TextColumn(width=150),
+        "차주": st.column_config.TextColumn(width=58), "운임": st.column_config.NumberColumn(format="%,d원", width=88),
+        "진행": st.column_config.TextColumn(width=102, help="청구 상태: 차주 청구 대기 → (차주가 청구서 발송) → 결제 필요 → (승인 · 결제) → 입금 완료"),
+        "내 평가": st.column_config.TextColumn(width=70, help="이 운송에 내가 남긴 기사 별점 · 위 '상호 평가'에서 등록")})
+    st.caption("행의 아무 칸이나 클릭하면 그 운송의 인보이스 · 전자인수증 창이 열립니다.")
+    cells = event.selection.cells
+    row = cells[0][0] if cells else None
+    # 같은 칸이 계속 선택돼 있는 동안 다른 조작으로 화면이 다시 그려져도 창이 또 뜨지 않게 (새로 클릭했을 때만)
+    picked = (row, cells[0][1]) if cells else None
+    if picked != st.session_state.get("history_picked"):
+        st.session_state.history_picked = picked
+        if row is not None and row < len(items):
+            history_dialog(items[row])
 
 
-def _history_actions(i: dict):
+PAY_METHODS = {"corp_card": "법인카드 (모의)", "transfer": "계좌이체 (모의)", "virtual": "가상계좌 (모의)"}
+VAT_RATE = 0.10
+
+
+@st.dialog("운송 상세 · 인보이스 · 전자인수증", width="large")
+def history_dialog(i: dict):
+    """운송 이력 행 클릭 → 한 창에서 인보이스(청구서 · 결제)와 전자인수증."""
     d = i["driver"] or {}
-    fees = (f'기본 {i["fare"]:,} + 추가 {i["extra_fee"]:,} + 통행료 {i["toll_fee"]:,}')
-    ui.html(f'<div class="ct-card"><div class="ct-row"><div><span class="ct-mono">{i["id"]}</span>'
-            f'<div class="ct-big">{i["title"]}</div><div class="ct-muted">{d.get("name", "-")} 차주 · '
-            f'{d.get("plate", "")} · 완료 {ui.dt_text(i["delivered_at"], "%Y.%m.%d %H:%M")}</div></div>'
-            f'<div style="text-align:right"><div class="ct-big">{ui.won(i["total_fee"])}</div>'
-            f'<div class="ct-muted">{fees}</div></div></div>'
-            + (f'<div class="ct-muted" style="margin-top:8px">차주 메모: {i["memo"]}</div>' if i["memo"] else "")
-            + "</div>")
-    c1, c2, _ = st.columns([1, 1, 3])
-    if c1.button("전자인수증", icon=":material/description:", width="stretch"):
-        pod_dialog(i)
-    if i["billing"] == "REQUESTED":
-        if c2.button("청구서 승인 · 결제", icon=":material/check_circle:", type="primary", width="stretch"):
-            pay_dialog(i)
-    else:
-        c2.button(i["billing_label"], disabled=True, width="stretch")
+    ui.html(f'<div><span class="ct-mono">{i["id"]}</span><div class="ct-big">{i["title"]}</div>'
+            f'<div class="ct-muted">{i["origin"]} → {i["destination"]}</div>'
+            f'<div class="ct-muted">{d.get("name", "-")} 차주 · {d.get("plate", "")} · '
+            f'완료 {ui.dt_text(i["delivered_at"], "%Y.%m.%d %H:%M")}'
+            + (f' · 배차 당시 상차 거리 {i["match"]["pickup_km"]:.0f}km' if i.get("match") else "") + '</div></div>')
+    t_inv, t_pod = st.tabs(["인보이스", "전자인수증"])
+    with t_inv:
+        _invoice_body(i)
+    with t_pod:
+        if i.get("pod"):
+            _pod_body(i)
+        else:
+            st.caption("전자인수증이 없습니다.")
+
+
+def _invoice_body(i: dict):
+    """운송 1건의 청구서: 운임 내역 · 공급가액 · 부가세 · 청구 상태 · 결제 내역 (결제 필요면 여기서 승인 · 결제)."""
+    total = i["total_fee"]
+    supply = round(total / (1 + VAT_RATE))
+    rows = [("기본 운임", ui.won(i["fare"])), ("추가 요금", ui.won(i["extra_fee"])), ("통행료", ui.won(i["toll_fee"])),
+            ("공급가액", ui.won(supply)), ("부가세 (10%)", ui.won(total - supply))]
+    table = "".join(f'<div class="ct-row" style="padding:6px 0;border-top:1px solid var(--line)">'
+                    f'<span class="ct-muted">{k}</span><span class="ct-strong">{v}</span></div>' for k, v in rows)
+    tone = {"REQUESTED": "amber", "PAID": "green", "REFUNDED": "red"}.get(i["billing"], "gray")
+    ui.html(f'<div class="ct-card"><div class="ct-row"><div>{ui.pill("청구 상태 · " + i["billing_label"], tone)}</div>'
+            f'<div style="text-align:right"><div class="ct-muted">합계 (VAT 포함)</div>'
+            f'<div class="ct-big">{ui.won(total)}</div></div></div><div style="margin-top:10px">{table}</div>'
+            + (f'<div class="ct-muted" style="margin-top:8px">차주 메모: {i["memo"]}</div>' if i.get("memo") else "")
+            + '</div>')
     p = i.get("payment")
     if p:
         state = "승인" if p["status"] == "APPROVED" else f"취소 ({p['cancel_reason']})"
         st.caption(f"모의 PG 결제 · {p['method_label']} · 거래번호 {p['tid']} · 승인번호 {p['approval_no']} · "
                    f"{ui.won(p['amount'])} · {state}")
-
-
-PAY_METHODS = {"corp_card": "법인카드 (모의)", "transfer": "계좌이체 (모의)", "virtual": "가상계좌 (모의)"}
-
-
-@st.dialog("청구서 승인 · 결제 (모의 PG)")
-def pay_dialog(i: dict):
-    st.write(f"**{i['id']} · {i['title']}**")
-    st.write(f"결제 금액 **{ui.won(i['total_fee'])}** (VAT 포함 · 기본 {i['fare']:,} + 추가 {i['extra_fee']:,} "
-             f"+ 통행료 {i['toll_fee']:,})")
-    method = st.radio("결제 수단", list(PAY_METHODS), format_func=PAY_METHODS.get, horizontal=True)
-    st.info("모의 결제입니다. 실제 카드 · 계좌 정보를 받지 않고, 실제 출금도 일어나지 않습니다. "
-            "승인하면 모의 거래번호가 발급되고 정산 완료로 바뀝니다.", icon=":material/info:")
-    c1, c2 = st.columns(2)
-    if c1.button("취소", width="stretch"):
-        st.rerun()
-    if c2.button("결제 승인", type="primary", width="stretch"):
-        try:
-            r = api.post(f"/shipper/history/{i['id']}/approve-invoice", json={"method": method})
-        except api.ApiError as e:
-            st.error(str(e))
-            return
-        ui.flash(f"{i['id']} 결제 승인 · 거래번호 {r['payment']['tid']} · 정산 완료")
-        st.rerun()
+    if i["billing"] == "UNBILLED":
+        st.info("차주가 아직 청구서를 보내지 않았습니다. 청구서가 오면 여기서 승인 · 결제할 수 있습니다.",
+                icon=":material/schedule:")
+    elif i["billing"] == "REQUESTED":
+        method = st.radio("결제 수단", list(PAY_METHODS), format_func=PAY_METHODS.get, horizontal=True,
+                          key=f"pay_method_{i['id']}")
+        st.caption("모의 결제입니다. 실제 카드 · 계좌 정보를 받지 않고 실제 출금도 없습니다. 승인하면 정산 완료로 바뀝니다.")
+        if st.button("청구서 승인 · 결제", icon=":material/check_circle:", type="primary", key=f"pay_{i['id']}"):
+            try:
+                r = api.post(f"/shipper/history/{i['id']}/approve-invoice", json={"method": method})
+            except api.ApiError as e:
+                st.error(str(e))
+                return
+            ui.flash(f"{i['id']} 결제 승인 · 거래번호 {r['payment']['tid']} · 정산 완료")
+            st.rerun()
 
 
 def invoice_section():
@@ -356,20 +372,41 @@ def invoice_section():
                 f'공급가액 {ui.won(inv["supply"])} · 부가세 {ui.won(inv["vat"])}</div>'
                 f'<div class="ct-big">{ui.won(inv["total"])}</div></div></div></div>')
         if inv["lines"]:
-            st.dataframe(pd.DataFrame([{
+            ev = st.dataframe(pd.DataFrame([{
                 "화물 ID": ln["order_id"], "화물": ln["title"], "차주": ln["driver"],
-                "결제일": ln["approved_at"][:10], "결제 수단": ln["method_label"], "거래번호": ln["tid"],
-                "공급가액": ln["supply"], "부가세": ln["vat"], "합계": ln["amount"],
-            } for ln in inv["lines"]]), hide_index=True, width="stretch", column_config={
-                "공급가액": st.column_config.NumberColumn(format="%,d원"),
-                "부가세": st.column_config.NumberColumn(format="%,d원"),
-                "합계": st.column_config.NumberColumn(format="%,d원")})
+                "결제일": ln["approved_at"][5:10].replace("-", "."), "결제 수단": ln["method_label"],
+                "거래번호": ln["tid"], "합계 (VAT 포함)": ln["amount"],
+            } for ln in inv["lines"]]), hide_index=True, width="stretch", on_select="rerun",
+                selection_mode="single-row", key="invoice_lines", column_config={   # 공급가액 · 부가세는 위 카드에
+                "화물 ID": st.column_config.TextColumn(width=125), "화물": st.column_config.TextColumn(width=160),
+                "차주": st.column_config.TextColumn(width=60), "결제일": st.column_config.TextColumn(width=50),
+                "결제 수단": st.column_config.TextColumn(width=105), "거래번호": st.column_config.TextColumn(width=135),
+                "합계 (VAT 포함)": st.column_config.NumberColumn(format="%,d원", width=100)})
+            sel = ev.selection.rows
+            if sel and sel[0] < len(inv["lines"]):
+                oid = inv["lines"][sel[0]]["order_id"]
+                if st.button(f"{oid} 전자인수증 보기", icon=":material/description:", key="inv_pod"):
+                    try:
+                        o = api.get(f"/orders/{oid}")
+                    except api.ApiError as e:
+                        st.error(str(e))
+                    else:
+                        if o.get("pod"):
+                            pod_dialog(o)
+                        else:
+                            st.info("이 화물은 전자인수증이 없습니다.")
+            else:
+                st.caption("행을 선택하면 그 운송의 전자인수증을 바로 볼 수 있습니다.")
         else:
             st.caption("이 달에 결제 승인된 운송비가 없습니다.")
 
 
 @st.dialog("전자 화물인수증 (e-POD)")
 def pod_dialog(i: dict):
+    _pod_body(i)
+
+
+def _pod_body(i: dict):
     pod, d = i["pod"], i["driver"] or {}
     rows = [("화물 ID", i["id"]), ("화물명", i["title"]), ("상차지", i["origin"]), ("하차지", i["destination"]),
             ("운송 차주", f"{d.get('name', '-')} ({d.get('plate', '-')})"), ("운임", ui.won(i["total_fee"])),

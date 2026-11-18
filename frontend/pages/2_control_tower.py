@@ -15,6 +15,8 @@ TYPE_LABEL = {"ALL": "전체 유형", "COLD": "온도 이상", "STAGNATION": "�
 
 # ======================================================================= 전국 관제 지도
 SEV = {"HIGH": ("긴급", "red"), "MEDIUM": ("주의", "amber"), "LOW": ("참고", "blue")}
+MAP_REFRESH = "2s"       # 관제 지도 갱신 주기
+MAP_GLIDE_MS = 2000      # 갱신 사이 차량 점이 미끄러지듯 움직이는 시간 (갱신 주기와 같게)
 AI_TIMEOUT = 60          # Gemini 응답은 수 초 ~ 수십 초 → 이 호출만 기본(5초)보다 길게 기다린다
 AI_EXAMPLES = ["전체 현황 요약해줘", "30분 이상 지연된 운행 요약해줘", "매칭 실패 원인 알려줘", "부산 상황 알려줘"]
 
@@ -329,7 +331,7 @@ def offers_list():
     ui.html(f'<div class="ct-card" style="padding:12px 16px">{rows}</div>')
 
 
-@st.fragment(run_every="3s")
+@st.fragment(run_every=MAP_REFRESH)
 def live_map(layer: str):
     try:
         fleet = api.get("/admin/fleet")
@@ -350,19 +352,25 @@ def live_map(layer: str):
     if not routes.empty:
         routes["line"] = routes["kind"].map(lambda k: ui.MAP_COLORS[k] + [110])
     df = df.drop(columns=["path"], errors="ignore")  # 점 레이어에는 경로가 필요 없음 (전송량 절약)
+    # 점 크기: 작은 미터 반경 + 최소 · 최대 픽셀로 묶어 전국 지도에서도 겹치지 않고 어느 지역인지 보이게
+    # (pydeck 은 radius_units 같은 '문자열' 설정을 계산식으로 바꿔 지도가 깨진다 → 단위 문자열은 쓰지 않음)
+    # 차량 점은 갱신(MAP_REFRESH) 사이를 미끄러지듯 이동 (deck.gl transitions) → 움직이는 게 보임
+    glide = {"getPosition": MAP_GLIDE_MS}
     layers = [
-        pdk.Layer("PathLayer", data=routes, get_path="path", get_color="line", width_min_pixels=2.5,
+        pdk.Layer("PathLayer", id="routes", data=routes, get_path="path", get_color="line", width_min_pixels=1.5,
                   joint_rounded=True, cap_rounded=True),
-        pdk.Layer("ScatterplotLayer", data=hubs, get_position="[lon, lat]", get_fill_color=[79, 70, 229, 35],
-                  get_radius=14000, radius_min_pixels=10),
-        pdk.Layer("ScatterplotLayer", data=df[df["kind"] == "anomaly"], get_position="[lon, lat]",
-                  get_fill_color=[226, 55, 43, 60], get_radius=16000, radius_min_pixels=16),
-        # 등록 차주(이름 있는 차량)는 바깥 링으로 강조 — 번호판·상태는 마우스 툴팁으로 확인
-        pdk.Layer("ScatterplotLayer", data=df[df["named"]], get_position="[lon, lat]", filled=False, stroked=True,
-                  get_line_color=[14, 17, 22], get_radius=9000, radius_min_pixels=10, line_width_min_pixels=2),
+        pdk.Layer("ScatterplotLayer", id="hubs", data=hubs, get_position="[lon, lat]", get_fill_color=[79, 70, 229, 40],
+                  get_radius=10000, radius_min_pixels=8, radius_max_pixels=14),
+        pdk.Layer("ScatterplotLayer", id="anomaly_halo", data=df[df["kind"] == "anomaly"], get_position="[lon, lat]",
+                  get_fill_color=[226, 55, 43, 70], get_radius=6000, radius_min_pixels=8, radius_max_pixels=14,
+                  transitions=glide),
+        # 등록 차주(이름 있는 차량)는 얇은 바깥 링으로 강조 — 번호판·상태는 마우스 툴팁으로 확인
+        pdk.Layer("ScatterplotLayer", id="named_ring", data=df[df["named"]], get_position="[lon, lat]", filled=False,
+                  stroked=True, get_line_color=[14, 17, 22], get_radius=2500, radius_min_pixels=5.5,
+                  radius_max_pixels=9, line_width_min_pixels=1.2, transitions=glide),
         pdk.Layer("ScatterplotLayer", data=df, id="trucks", get_position="[lon, lat]", get_fill_color="color",
-                  get_radius=4500, radius_min_pixels=5, stroked=True, get_line_color=[255, 255, 255],
-                  line_width_min_pixels=1.5, pickable=True),
+                  get_radius=1500, radius_min_pixels=3.5, radius_max_pixels=6, stroked=True,
+                  get_line_color=[255, 255, 255], line_width_min_pixels=0.8, pickable=True, transitions=glide),
     ]
     deck = pdk.Deck(
         layers=layers, map_style=pdk.map_styles.CARTO_LIGHT,

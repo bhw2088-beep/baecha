@@ -194,8 +194,14 @@ def _split_route(route: list[list[float]], lon: float, lat: float) -> tuple[list
     return route[:i + 1] + [[lon, lat]], [[lon, lat]] + route[i + 1:]
 
 
-def route_map(order: dict, height: int = 240):
-    """화물 1건의 상차→하차 도로 경로와 현재 위치. 지나온 길은 진하게, 남은 길은 연하게."""
+# 지도 차량 점: 작은 반경 + 최소 · 최대 픽셀 (지역이 보이게) · 갱신 사이를 미끄러지듯 이동 (deck.gl transitions)
+# pydeck 은 radius_units 같은 '문자열' 설정을 계산식으로 바꿔 지도를 깨뜨리므로 단위 문자열은 쓰지 않는다
+MAP_GLIDE_MS = 2000
+
+
+def route_map(order: dict, height: int = 240, glide_ms: int = MAP_GLIDE_MS):
+    """화물 1건의 상차→하차 도로 경로와 현재 위치. 지나온 길은 진하게, 남은 길은 연하게.
+    glide_ms: 화면 갱신 주기와 같게 주면 차량 점이 갱신 사이를 끊김 없이 이동한다."""
     route = order["route"]
     ends = pd.DataFrame([{"lon": route[0][0], "lat": route[0][1], "c": [14, 17, 22]},
                          {"lon": route[-1][0], "lat": route[-1][1], "c": [14, 17, 22]}])
@@ -203,22 +209,24 @@ def route_map(order: dict, height: int = 240):
     truck_color = MAP_COLORS["anomaly"] if order.get("anomaly") else [79, 70, 229]
     done, left = _split_route(route, order["lon"], order["lat"]) if order["status"] == "IN_TRANSIT" else ([], route)
     layers = [
-        pdk.Layer("PathLayer", data=pd.DataFrame([{"path": left}]), get_path="path", get_color=[79, 70, 229, 90],
-                  width_min_pixels=4, joint_rounded=True, cap_rounded=True),
-        pdk.Layer("PathLayer", data=pd.DataFrame([{"path": done}]) if len(done) > 1 else pd.DataFrame({"path": []}),
-                  get_path="path", get_color=[79, 70, 229, 230], width_min_pixels=4, joint_rounded=True,
+        pdk.Layer("PathLayer", id="route_left", data=pd.DataFrame([{"path": left}]), get_path="path",
+                  get_color=[79, 70, 229, 90], width_min_pixels=3, joint_rounded=True, cap_rounded=True),
+        pdk.Layer("PathLayer", id="route_done",
+                  data=pd.DataFrame([{"path": done}]) if len(done) > 1 else pd.DataFrame({"path": []}),
+                  get_path="path", get_color=[79, 70, 229, 230], width_min_pixels=3, joint_rounded=True,
                   cap_rounded=True),
-        pdk.Layer("ScatterplotLayer", data=ends, get_position="[lon, lat]", get_fill_color="c",
-                  get_radius=3000, radius_min_pixels=5),
-        pdk.Layer("ScatterplotLayer", data=truck, get_position="[lon, lat]", get_fill_color=truck_color,
-                  get_radius=6000, radius_min_pixels=8, stroked=True, get_line_color=[255, 255, 255],
-                  line_width_min_pixels=3),
+        pdk.Layer("ScatterplotLayer", id="route_ends", data=ends, get_position="[lon, lat]", get_fill_color="c",
+                  get_radius=1500, radius_min_pixels=3.5, radius_max_pixels=6),
+        pdk.Layer("ScatterplotLayer", id="route_truck", data=truck, get_position="[lon, lat]",
+                  get_fill_color=truck_color, get_radius=2000, radius_min_pixels=5, radius_max_pixels=8,
+                  stroked=True, get_line_color=[255, 255, 255], line_width_min_pixels=1.5,
+                  transitions={"getPosition": glide_ms}),
     ]
     st.pydeck_chart(pdk.Deck(layers=layers, map_style=pdk.map_styles.CARTO_LIGHT, initial_view_state=_view_for(route)),
                     height=height)
 
 
-def fleet_routes_map(orders: list[dict], height: int = 420, key: str | None = None):
+def fleet_routes_map(orders: list[dict], height: int = 420, key: str | None = None, glide_ms: int = MAP_GLIDE_MS):
     """여러 화물의 도로 경로와 차량 위치를 한 지도에 (화주 '운행 중 차량 지도')."""
     active = [o for o in orders if o["status"] in ("ASSIGNED", "IN_TRANSIT")]
     if not active:
@@ -235,11 +243,12 @@ def fleet_routes_map(orders: list[dict], height: int = 420, key: str | None = No
                      "progress": f"{o['progress']:.0f}%"})
     df = pd.DataFrame(rows)
     layers = [
-        pdk.Layer("PathLayer", data=df, get_path="path", get_color="line", width_min_pixels=3,
+        pdk.Layer("PathLayer", id="fleet_routes", data=df, get_path="path", get_color="line", width_min_pixels=2,
                   joint_rounded=True, cap_rounded=True, pickable=True),
-        pdk.Layer("ScatterplotLayer", data=df, get_position="[lon, lat]", get_fill_color="color",
-                  get_radius=5000, radius_min_pixels=7, stroked=True, get_line_color=[255, 255, 255],
-                  line_width_min_pixels=2, pickable=True),
+        pdk.Layer("ScatterplotLayer", id="fleet_trucks", data=df, get_position="[lon, lat]", get_fill_color="color",
+                  get_radius=1500, radius_min_pixels=4, radius_max_pixels=7, stroked=True,
+                  get_line_color=[255, 255, 255], line_width_min_pixels=1, pickable=True,
+                  transitions={"getPosition": glide_ms}),
     ]
     pts = [p for o in active for p in o["route"]]
     deck = pdk.Deck(layers=layers, map_style=pdk.map_styles.CARTO_LIGHT, initial_view_state=_view_for(pts),

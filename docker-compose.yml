@@ -29,6 +29,7 @@ x-app: &app
 # TZ: 컨테이너 기본은 UTC → '오늘' 기준 시각을 한국 시간으로
 x-app-env: &app-env
   TZ: Asia/Seoul
+  TIME_SCALE: ${TIME_SCALE:-120}               # 시연 배속: 실제 1초 = 운행 2분 (관제 지도에서 차량 이동이 보이게)
   DEMO_AUTO_DELIVER: ${DEMO_AUTO_DELIVER:-1}   # 데모: 도착한 운행 자동 하차 완료 (0 이면 기사가 직접)
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
   REDIS_URL: redis://redis:6379/0
@@ -114,7 +115,7 @@ services:
       TZ: Asia/Seoul
       API_BASE: http://backend:8000/api/v1
       SIM_API_KEY: ${SIM_API_KEY}
-      TIME_SCALE: ${TIME_SCALE:-20}
+      TIME_SCALE: ${TIME_SCALE:-120}
       SIM_DEVIATION_EVERY: ${SIM_DEVIATION_EVERY:-240}
       SIM_SPIKE_EVERY: ${SIM_SPIKE_EVERY:-90}        # GPS 단발 튐 (1~2회 · 경보 없어야 정상)
       SIM_REOUTSOURCE_EVERY: ${SIM_REOUTSOURCE_EVERY:-0}
