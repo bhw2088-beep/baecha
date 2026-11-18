@@ -1,0 +1,232 @@
+{
+  "mode": 1,
+  "started": "2026-11-18 11:07:22",
+  "options": {
+    "mode": null,
+    "drivers": 1000,
+    "orders": 100,
+    "accept_rate": 0.9,
+    "match_seconds": 180,
+    "rps": 200,
+    "gps_seconds": 30,
+    "workers": 64,
+    "seed": 7,
+    "keep": false
+  },
+  "checks": [
+    {
+      "name": "서버 연결 (/health)",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "기사 5명 가입 (노란 번호판 · 사업자번호 Mod-10 · 서류 3종 · 중복 검사 통과)",
+      "ok": true,
+      "note": "5/5"
+    },
+    {
+      "name": "관제 승인 5명 → 매칭 후보",
+      "ok": true,
+      "note": "5/5"
+    },
+    {
+      "name": "흰색 번호판(자가용) 기사 가입 차단",
+      "ok": true,
+      "note": "자가용 (흰색 번호판) 차량은 등록할 수 없습니다. 화물 운송은 사업용 노란색 번호판(바 · 사 · 아 · 자)만 가능합니다."
+    },
+    {
+      "name": "사업자번호 검증 숫자 오류 가입 차단",
+      "ok": true,
+      "note": "사업자등록번호 확인 실패: 검증 숫자 오류 (Mod-10) (검증 숫자는 1 이어야 합니다) · 모의 판정 (국세청 연동 전)"
+    },
+    {
+      "name": "주문 1건 생성 (서울 → 부산 2.5톤 · 사전 검증 통과)",
+      "ok": true,
+      "note": "2152.1ms"
+    },
+    {
+      "name": "상차지 = 하차지 주문 차단",
+      "ok": true,
+      "note": "상차지와 하차지가 같은 지역입니다."
+    },
+    {
+      "name": "헝가리안 매칭 → 기사에게 제안 도착",
+      "ok": true,
+      "note": "0.05초"
+    },
+    {
+      "name": "기사 수락 → 배차 확정 → 운행 시작",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "GPS 핑 전송 (202) → Redis Streams 처리",
+      "ok": true,
+      "note": "20/20 · 유실 0"
+    },
+    {
+      "name": "배정 기사가 아닌 단말의 핑 차단 (불법 재위탁 의심)",
+      "ok": true,
+      "note": "배정된 기사의 단말이 아닙니다. 불법 재위탁 의심으로 관제에 보고되었습니다."
+    }
+  ],
+  "passed": 11,
+  "total": 11,
+  "drivers": {
+    "requested": 5,
+    "registered": 5,
+    "failed": 0,
+    "fail_reasons": [],
+    "register_sec": 2.3,
+    "register_per_sec": 2.1,
+    "register_latency": {
+      "count": 5,
+      "avg_ms": 2281.7,
+      "p50_ms": 2325.1,
+      "p95_ms": 2327.3,
+      "p99_ms": 2327.3,
+      "max_ms": 2327.3
+    },
+    "approved": 5,
+    "approve_sec": 2.2,
+    "approve_latency": {
+      "count": 5,
+      "avg_ms": 2190.3,
+      "p50_ms": 2184.8,
+      "p95_ms": 2213.9,
+      "p99_ms": 2213.9,
+      "max_ms": 2213.9
+    }
+  },
+  "orders": {
+    "requested": 1,
+    "created": 1,
+    "failed": 0,
+    "fail_reasons": [],
+    "sec": 2.15,
+    "latency": {
+      "count": 1,
+      "avg_ms": 2152.1,
+      "p50_ms": 2152.1,
+      "p95_ms": 2152.1,
+      "p99_ms": 2152.1,
+      "max_ms": 2152.1
+    }
+  },
+  "matching": {
+    "orders": 1,
+    "offered": 1,
+    "assigned": 1,
+    "unassigned": 0,
+    "first_offer_sec": {
+      "p50": 0.05,
+      "p95": 0.05,
+      "max": 0.05
+    },
+    "first_offer_within_5s_pct": 100.0,
+    "assigned_sec": {
+      "p50": 2.22,
+      "p95": 2.22,
+      "max": 2.22
+    },
+    "all_assigned_sec": 2.22,
+    "declines": 0,
+    "server_round_ms": {
+      "count": 1,
+      "avg_ms": 20.1,
+      "p50_ms": 20.1,
+      "p95_ms": 20.1,
+      "p99_ms": 20.1,
+      "max_ms": 20.1
+    },
+    "biggest_round": {
+      "orders": 5,
+      "drivers": 5,
+      "candidate_pairs": 5,
+      "assigned": 1,
+      "latency_ms": 20.07
+    },
+    "spatial_filter": "PostGIS ST_DWithin (테스트 스택 DB)",
+    "admin_poll": {
+      "count": 4,
+      "avg_ms": 28.1,
+      "p50_ms": 25.0,
+      "p95_ms": 41.8,
+      "p99_ms": 41.8,
+      "max_ms": 41.8
+    },
+    "runs_started": 1,
+    "fail_reasons": {}
+  },
+  "gps": {
+    "target_rps": 5,
+    "seconds": 4,
+    "workers": 2,
+    "runs": 1,
+    "sent": 20,
+    "achieved_rps": 4.6,
+    "accepted_202": 20,
+    "error_pct": 0.0,
+    "status_codes": {
+      "202": 20
+    },
+    "latency": {
+      "count": 20,
+      "avg_ms": 213.5,
+      "p50_ms": 5.2,
+      "p95_ms": 2052.6,
+      "p99_ms": 2130.9,
+      "max_ms": 2130.9
+    },
+    "queued_to_redis": 20,
+    "server_handled": 20,
+    "lost": 0,
+    "drain_sec": 0,
+    "worker_errors": 0,
+    "relay_p95": "0.00초",
+    "redis": {
+      "xlen": 20,
+      "pending": 0,
+      "lag": 0
+    }
+  },
+  "resources": {
+    "backend": {
+      "cpu_max": 248.9,
+      "cpu_avg": 64.8,
+      "mem_start_mib": 174.9,
+      "mem_max_mib": 176.2,
+      "mem_end_mib": 175.9,
+      "cpu_max_by_phase": {
+        "기사 가입": 3.0,
+        "주문 생성": 0.3,
+        "GPS 핑": 248.9
+      }
+    },
+    "db": {
+      "cpu_max": 5.3,
+      "cpu_avg": 2.8,
+      "mem_start_mib": 43.8,
+      "mem_max_mib": 46.8,
+      "mem_end_mib": 46.8,
+      "cpu_max_by_phase": {
+        "기사 가입": 0.0,
+        "주문 생성": 3.5,
+        "GPS 핑": 5.3
+      }
+    },
+    "redis": {
+      "cpu_max": 3.5,
+      "cpu_avg": 1.3,
+      "mem_start_mib": 5.4,
+      "mem_max_mib": 5.4,
+      "mem_end_mib": 5.1,
+      "cpu_max_by_phase": {
+        "기사 가입": 0.3,
+        "주문 생성": 0.6,
+        "GPS 핑": 3.5
+      }
+    }
+  },
+  "elapsed_sec": 28.3
+}

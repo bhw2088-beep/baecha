@@ -196,6 +196,14 @@ async def gps_status():
     return {**gps_stream_worker.stats, "live": store.admin_summary()["gps_live"]}
 
 
+@router.get("/admin/perf", dependencies=[Admin])
+async def perf_status(since: float | None = None):
+    """서버 성능 기록 (core/perf.py): DB 저장 단계별 시간 · 이벤트 루프 멈춤 · 1초 넘는 요청 · 긴 GC.
+    since = epoch 초 (이 시각 이후만). 부하 시뮬레이터가 단계별로 나눠 본다."""
+    from ...core import perf
+    return perf.snapshot(since)
+
+
 @router.get("/admin/agent/briefing", dependencies=[Admin])
 async def agent_briefing():
     """규칙 기반 AI 관제 보조: 매칭 실패 · 운행 이상 · 지연 · 정산 · 가입 심사 · 평판 · 수급을 점검해 조치와 안내 문구 초안을 제안."""

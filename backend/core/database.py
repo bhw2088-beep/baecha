@@ -173,7 +173,8 @@ class DbSync:
                           {"key": "seq", "value": dict(store._seq)}],
         }
 
-    def save(self, store: "Store", throttle: float = 0.0):
+    def save(self, store: "Store", throttle: float = 0.0) -> bool:
+        """바뀐 행만 PostgreSQL 에 upsert. throttle 초 안에 이미 저장했으면 건너뛰고 False (저장 시도했으면 True)."""
         import json
         import time
 
@@ -181,13 +182,21 @@ class DbSync:
         from sqlalchemy.dialects.postgresql import insert
         now = time.monotonic()
         if throttle and now - self.last_save < throttle:
-            return
+            return False
         self.last_save = now
+        # 단계별 시간 측정 (core/perf.py · GET /admin/perf): 행 만들기 · 바뀐 행 비교(md5) · DB 쓰기
+        t0 = time.perf_counter()
+        rows_ms = diff_ms = 0.0
+        n_changed: dict[str, int] = {}
         try:
             with SessionLocal() as s:
-                for model, rows in self._rows(store).items():
+                t = time.perf_counter()
+                all_rows = self._rows(store)
+                rows_ms = (time.perf_counter() - t) * 1000
+                for model, rows in all_rows.items():
                     pk = model.__mapper__.primary_key[0].name
                     table = model.__tablename__
+                    t = time.perf_counter()
                     changed, alive = [], set()
                     for r in rows:
                         key = r[pk]
@@ -197,12 +206,14 @@ class DbSync:
                         if self.hashes.get((table, key)) != h:
                             changed.append(r)
                             self.hashes[(table, key)] = h
+                    gone = [k for (tb, k) in self.hashes if tb == table and k not in alive]
+                    diff_ms += (time.perf_counter() - t) * 1000
+                    n_changed[table] = len(changed) + len(gone)
                     if changed:
                         stmt = insert(model).values(changed)
                         cols = [c for c in changed[0] if c != pk]
                         s.execute(stmt.on_conflict_do_update(index_elements=[pk],
                                                              set_={c: stmt.excluded[c] for c in cols}))
-                    gone = [k for (t, k) in self.hashes if t == table and k not in alive]
                     if gone:
                         s.execute(delete(model).where(getattr(model, pk).in_(gone)))
                         for k in gone:
@@ -212,6 +223,10 @@ class DbSync:
         except Exception as e:  # noqa: BLE001 — 저장 실패해도 요청은 계속 처리 (다음 저장 때 다시 시도)
             self.hashes.clear()
             self.error = f"{type(e).__name__}: {str(e).splitlines()[0][:160]}"
+        total_ms = (time.perf_counter() - t0) * 1000
+        from . import perf
+        perf.record_save(total_ms, rows_ms, diff_ms, max(0.0, total_ms - rows_ms - diff_ms), n_changed)
+        return True
 
     def load(self, store: "Store") -> bool:
         """테이블에 화물이 있으면 메모리로 불러온다. 없으면 False (→ 시드 데이터로 시작)."""
@@ -306,10 +321,11 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, Tra
             rebuild_chain(self.audit)  # 해시 체인 도입 전 감사 로그 → 한 번 다시 엮는다
         self._audit_seq = max((int(e["id"].split("-")[1]) for e in self.audit), default=0)
 
-    def persist(self, throttle: float = 0.0):
-        """바뀐 데이터를 DB 에 저장 (DB 를 안 쓰면 아무것도 안 함)."""
+    def persist(self, throttle: float = 0.0) -> bool:
+        """바뀐 데이터를 DB 에 저장 (DB 를 안 쓰면 아무것도 안 함). throttle 때문에 건너뛰었으면 False."""
         if self.db:
-            self.db.save(self, throttle)
+            return self.db.save(self, throttle)
+        return True
 
     def reset_all(self) -> dict:
         """관제 [데모 데이터 초기화]: 시드 데이터로 되돌린다. 데모 계정의 로그인은 유지."""

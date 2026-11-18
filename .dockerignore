@@ -33,3 +33,4 @@ stress_8k/
 # 운영 데이터 (볼륨으로만 보관)
 backend/data/pod_photos/
 .devcontainer/
+scripts/

@@ -19,3 +19,6 @@ stress_8k/results/logs/
 # 에디터 (8,000+ 스트레스 테스트 실행 목록 launch.json 만 공유)
 .vscode/*
 !.vscode/launch.json
+
+# 통합 시뮬레이터 결과 (시각별 사본은 커밋 안 함 · mode<N>_latest.json 만 커밋)
+scripts/results/mode*_2*.json
