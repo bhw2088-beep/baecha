@@ -30,6 +30,7 @@ STATUS_LABEL = {
     "CLOSED": "폐업자",
     "UNREGISTERED": "국세청 미등록",
     "MISMATCH": "등록 정보 불일치",
+    "UNAVAILABLE": "국세청 확인 불가 (잠시 후 다시 시도)",
     "CHECKSUM_FAIL": "검증 숫자 오류 (Mod-10)",
     "INVALID_FORMAT": "형식 오류 (숫자 10자리 아님)",
 }
@@ -138,6 +139,68 @@ def verify_business(value: str | None, *, api_key: str = "", owner: str | None =
     if api_key:
         return nts_business_status(value or "", api_key, owner, start_date)
     return mock_business_status(value)
+
+
+# ------------------------------------------------------------------ 사업자 진위확인 (화주 가입: 4개 일치)
+# 시연용 모의 사업자 등록부: 번호 → 상호 · 대표자 · 개업일자. 이 번호들은 국세청 키가 있어도 등록부로 확인한다
+# (실제 국세청은 실제 사업자만 확인해 주므로, 시연용 가짜 번호는 국세청에 보내면 항상 거절된다).
+MOCK_REGISTRY = {
+    "1248100998": {"name": "삼성물류", "owner": "김삼성", "start": "19960101"},
+    "2118136000": {"name": "현대글로비스", "owner": "이현대", "start": "20010223"},
+    "1078146719": {"name": "LG디스플레이", "owner": "박엘지", "start": "19850217"},
+    "1058712345": {"name": "배차테스트물류", "owner": "홍길동", "start": "20200115"},
+}
+
+
+def _company_key(name: str | None) -> str:
+    """상호 비교용: 띄어쓰기 · (주) · 주식회사 · ㈜ 무시, 영문 대소문자 무시."""
+    s = re.sub(r"\(주\)|㈜|주식회사", "", name or "")
+    return re.sub(r"\s", "", s).lower()
+
+
+def _identity_mismatch(record: dict, company: str, owner: str, start: str) -> list[str]:
+    bad = []
+    if _company_key(company) != _company_key(record["name"]):
+        bad.append("기업명")
+    if re.sub(r"\s", "", owner or "") != record["owner"]:
+        bad.append("대표자명")
+    if re.sub(r"\D", "", start or "") != record["start"]:
+        bad.append("개업일자")
+    return bad
+
+
+def verify_business_identity(value: str | None, company: str | None, owner: str | None, start_date: str | None,
+                             *, api_key: str = "", timeout: float = 5.0) -> dict:
+    """사업자 진위확인: 사업자번호 · 상호 · 대표자명 · 개업일자 4개가 같은 사업자 등록 정보와 모두 일치해야 ok.
+    순서: 형식 · Mod-10 → 휴업 · 폐업(모의) → 시연용 등록부(번호가 있으면) / 국세청 진위확인 API(키가 있으면).
+    등록부에도 없고 키도 없으면 확인할 수 없으므로 거절한다. 국세청 장애면 통과시키지 않고 '확인 불가'로 거절."""
+    d = normalize_biz_no(value)
+    first = mock_business_status(d)
+    if first["status"] in ("INVALID_FORMAT", "CHECKSUM_FAIL", "SUSPENDED", "CLOSED"):
+        return first
+    start = re.sub(r"\D", "", start_date or "")
+    if d in MOCK_REGISTRY:
+        bad = _identity_mismatch(MOCK_REGISTRY[d], company or "", owner or "", start)
+        if bad:
+            return _result("MISMATCH", "mock", d, note="사업자등록 정보와 다른 항목: " + " · ".join(bad))
+        return _result("CONTINUING", "mock", d, note="기업명 · 대표자명 · 개업일자 일치 (시연용 등록부)")
+    if not api_key:
+        return _result("UNREGISTERED", "mock", d, note="시연용 사업자 등록부에 없는 번호입니다 (국세청 키가 없어 실제 조회 불가)")
+    import requests
+    try:
+        body = {"businesses": [{"b_no": d, "start_dt": start, "p_nm": (owner or "").strip(),
+                                "b_nm": (company or "").strip()}]}
+        r = requests.post(f"{NTS_BASE}/validate", params={"serviceKey": api_key}, json=body, timeout=timeout)
+        r.raise_for_status()
+        row = r.json()["data"][0]
+    except Exception as e:  # noqa: BLE001 — 국세청 장애 · 키 오류: 확인 없이 통과시키지 않는다
+        return _result("UNAVAILABLE", "nts", d, note=f"국세청 진위확인 호출 실패 ({type(e).__name__})")
+    if row.get("valid") != "01":
+        return _result("MISMATCH", "nts", d,
+                       note=row.get("valid_msg") or "기업명 · 대표자명 · 개업일자가 사업자등록 정보와 일치하지 않습니다")
+    st = row.get("status") or {}
+    code = NTS_CODE.get(st.get("b_stt_cd") or "", "UNREGISTERED")
+    return _result(code, "nts", d, note="국세청 진위확인 일치", tax_type=st.get("tax_type"))
 
 
 # ------------------------------------------------------------------ 차량 번호판

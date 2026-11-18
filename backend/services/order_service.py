@@ -6,10 +6,11 @@ Store 에 섞어 쓰는 Mixin 이다 (데이터는 core/database.py 의 Store �
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta
 from statistics import mean
 
-from ..config import TIME_SCALE
+from ..config import TIME_SCALE, settings
 from ..core.errors import ApiError
 from ..engines.fsm import order_fsm
 from ..engines.matcher import spatial as geo
@@ -66,7 +67,19 @@ class OrderMixin:
                     o["progress"] = min(97.0, o["progress"] + sim_hours * o["speed"] / max(o["distance_km"], 1) * 100)
                 if o["cold_chain"] and o["temp_set"] is not None and self._open_anomaly(o["id"], "COLD") is None:
                     o["temp_now"] = round(o["temp_set"] + self.rng.uniform(-0.4, 0.4), 1)
+            if settings.demo_auto_deliver:
+                self._auto_deliver(now)
         self._matching_tick()
+
+    def _auto_deliver(self, now: datetime):
+        """데모: 하차지에 도착한(97%) 운행을 자동으로 하차 완료 → 기사 위치가 하차지가 되고 바로 다음 매칭 후보.
+        (DEMO_AUTO_DELIVER=1 일 때만. 기사가 직접 [하차 완료]를 누르는 시연을 하려면 0)"""
+        arrived = [o for o in self.orders.values()
+                   if o["status"] == "IN_TRANSIT" and o["progress"] >= 97.0 and not self._open_anomaly(o["id"], "STAGNATION")]
+        for o in arrived:
+            photo = {"filename": "auto_pod.jpg", "size": 0, "seed": True, "auto": True,
+                     "sha256": hashlib.sha256(f"auto-pod|{o['id']}|{_iso(now)}".encode()).hexdigest()}
+            self.complete_run(o["driver_id"], o["id"], "자동 인수 (데모)", photo=photo)
 
     # ---- GPS 수신 (workers/gps_stream_worker.py 가 Redis Streams 에서 읽어 호출)
     GPS_FRESH_SEC = 15
@@ -205,8 +218,23 @@ class OrderMixin:
         return o
 
     def _active_run_of(self, driver_id: str) -> dict | None:
+        idx = getattr(self, "_driver_index", None)   # 매칭 라운드 중이면 미리 정리한 색인 사용
+        if idx is not None:
+            return idx["run"].get(driver_id)
         return next((o for o in self.orders.values()
                      if o["driver_id"] == driver_id and o["status"] in ACTIVE_RUN), None)
+
+    def _build_driver_index(self) -> dict:
+        """기사 → 운행 중 화물 · 응답 대기 중인 제안 (전체 화물을 한 번만 훑는다).
+        화물 상태가 바뀌지 않는 구간(매칭 라운드의 후보 평가)에서만 쓴다."""
+        run: dict[str, dict] = {}
+        offer: dict[str, dict] = {}
+        for o in self.orders.values():
+            if o["driver_id"] and o["status"] in ACTIVE_RUN:
+                run.setdefault(o["driver_id"], o)
+            if o["status"] == "MATCHING" and o["offer"]:
+                offer.setdefault(o["offer"]["driver_id"], o)
+        return {"run": run, "offer": offer}
 
     def _driver_coord(self, d: dict) -> tuple[float, float]:
         run = self._active_run_of(d["id"])

@@ -1,0 +1,494 @@
+{
+  "generated_at": "2026-11-18 09:55",
+  "cases": 10000,
+  "seed": 7,
+  "margins": [
+    0.0,
+    0.05,
+    0.1,
+    0.15
+  ],
+  "errors": [
+    [
+      -5.0,
+      5.0
+    ],
+    [
+      -5.0,
+      10.0
+    ],
+    [
+      -15.0,
+      15.0
+    ]
+  ],
+  "bad_rate": 0.15,
+  "workers": 16,
+  "elapsed_sec": 1253.4,
+  "clean_cases": 8508,
+  "bad_cases": 1492,
+  "bad_labels": {
+    "overload": "과적 (최대 적재량 110~120%)",
+    "eccentric": "편심 (장비 1대 앞쪽 쏠림)",
+    "top_load": "상부 허용하중 초과 (쌓을 수밖에 없는 물량)",
+    "nostack": "적층 불가 품목 위 적재 (바닥 부족)",
+    "cold_mismatch": "냉장 화물 → 상온 차량",
+    "oversize": "적재함보다 큰 화물"
+  },
+  "by_margin": {
+    "0.0": {
+      "clean": 8508,
+      "ok": 7315,
+      "fail": 1193,
+      "fail_reasons": {
+        "R7 아래가 파손주의 · 냉동(최상단 전용) 품목": 429,
+        "R6 아래가 적층 불가 품목": 289,
+        "R1 남은 공간 부족": 190,
+        "R7 최상단 배치": 169,
+        "R5 지지면 부족": 105
+      },
+      "declared_fail": 0,
+      "avg_vol_pct": 28.8,
+      "avg_wt_pct": 55.8,
+      "trucks": {
+        "5톤 윙바디": 1222,
+        "25톤 무진동": 1325,
+        "11톤 탑차": 2548,
+        "11톤 냉동탑차": 856,
+        "2.5톤 카고": 742,
+        "1톤 카고": 271,
+        "5톤 냉동탑차": 351
+      },
+      "bigger_truck_vs_base": 0,
+      "lost_vs_base": 0,
+      "ms_avg": 556.8,
+      "ms_p95": 2772.0,
+      "real": {
+        "-5:5": {
+          "checked": 7315,
+          "any": 499,
+          "top": 485,
+          "over": 0,
+          "axle": 15,
+          "worst": 4.81,
+          "buckets": {
+            "2~5%": 211,
+            "≤2%": 274
+          },
+          "rate": 6.82
+        },
+        "-5:10": {
+          "checked": 7315,
+          "any": 986,
+          "top": 938,
+          "over": 23,
+          "axle": 33,
+          "worst": 9.63,
+          "buckets": {
+            "≤2%": 277,
+            "5~10%": 295,
+            "2~5%": 366
+          },
+          "rate": 13.48
+        },
+        "-15:15": {
+          "checked": 7315,
+          "any": 966,
+          "top": 877,
+          "over": 52,
+          "axle": 49,
+          "worst": 14.92,
+          "buckets": {
+            "≤2%": 195,
+            ">10%": 146,
+            "2~5%": 242,
+            "5~10%": 294
+          },
+          "rate": 13.21
+        }
+      },
+      "bad": {
+        "overload": {
+          "injected": 244,
+          "blocked": 244,
+          "reasons": {
+            "R10 축중량 균형": 244,
+            "R4 최대 적재중량 초과": 128,
+            "R9 안전율 한도 초과": 116
+          }
+        },
+        "eccentric": {
+          "injected": 223,
+          "blocked": 223,
+          "reasons": {
+            "R10 축중량 균형": 223
+          }
+        },
+        "top_load": {
+          "injected": 260,
+          "blocked": 260,
+          "reasons": {
+            "R6 아래 품목의 상부 허용하중 초과": 260
+          }
+        },
+        "nostack": {
+          "injected": 243,
+          "blocked": 243,
+          "reasons": {
+            "R6 아래가 적층 불가 품목": 243
+          }
+        },
+        "cold_mismatch": {
+          "injected": 277,
+          "blocked": 277,
+          "reasons": {
+            "R0 차량-화물 호환": 277,
+            "R4 최대 적재중량 초과": 31,
+            "R1 남은 공간 부족": 11
+          }
+        },
+        "oversize": {
+          "injected": 245,
+          "blocked": 245,
+          "reasons": {
+            "R9 안전율 한도 초과": 245
+          }
+        }
+      }
+    },
+    "0.05": {
+      "clean": 8508,
+      "ok": 7306,
+      "fail": 1202,
+      "fail_reasons": {
+        "R7 아래가 파손주의 · 냉동(최상단 전용) 품목": 435,
+        "R6 아래가 적층 불가 품목": 289,
+        "R1 남은 공간 부족": 192,
+        "R7 최상단 배치": 172,
+        "R5 지지면 부족": 103
+      },
+      "declared_fail": 0,
+      "avg_vol_pct": 28.8,
+      "avg_wt_pct": 55.8,
+      "trucks": {
+        "5톤 윙바디": 1224,
+        "25톤 무진동": 1316,
+        "11톤 탑차": 2550,
+        "11톤 냉동탑차": 856,
+        "2.5톤 카고": 738,
+        "1톤 카고": 271,
+        "5톤 냉동탑차": 351
+      },
+      "bigger_truck_vs_base": 33,
+      "lost_vs_base": 19,
+      "ms_avg": 567.3,
+      "ms_p95": 2831.6,
+      "real": {
+        "-5:5": {
+          "checked": 7306,
+          "any": 15,
+          "top": 0,
+          "over": 0,
+          "axle": 15,
+          "worst": 0.0,
+          "buckets": {},
+          "rate": 0.21
+        },
+        "-5:10": {
+          "checked": 7306,
+          "any": 301,
+          "top": 251,
+          "over": 23,
+          "axle": 32,
+          "worst": 4.22,
+          "buckets": {
+            "≤2%": 156,
+            "2~5%": 95
+          },
+          "rate": 4.12
+        },
+        "-15:15": {
+          "checked": 7306,
+          "any": 558,
+          "top": 467,
+          "over": 53,
+          "axle": 48,
+          "worst": 9.17,
+          "buckets": {
+            "≤2%": 169,
+            "5~10%": 123,
+            "2~5%": 175
+          },
+          "rate": 7.64
+        }
+      },
+      "bad": {
+        "overload": {
+          "injected": 244,
+          "blocked": 244,
+          "reasons": {
+            "R10 축중량 균형": 244,
+            "R4 최대 적재중량 초과": 128,
+            "R9 안전율 한도 초과": 116
+          }
+        },
+        "eccentric": {
+          "injected": 223,
+          "blocked": 223,
+          "reasons": {
+            "R10 축중량 균형": 223
+          }
+        },
+        "top_load": {
+          "injected": 260,
+          "blocked": 260,
+          "reasons": {
+            "R6 아래 품목의 상부 허용하중 초과": 260
+          }
+        },
+        "nostack": {
+          "injected": 243,
+          "blocked": 243,
+          "reasons": {
+            "R6 아래가 적층 불가 품목": 243
+          }
+        },
+        "cold_mismatch": {
+          "injected": 277,
+          "blocked": 277,
+          "reasons": {
+            "R0 차량-화물 호환": 277,
+            "R4 최대 적재중량 초과": 31,
+            "R1 남은 공간 부족": 11
+          }
+        },
+        "oversize": {
+          "injected": 245,
+          "blocked": 245,
+          "reasons": {
+            "R9 안전율 한도 초과": 245
+          }
+        }
+      }
+    },
+    "0.1": {
+      "clean": 8508,
+      "ok": 7292,
+      "fail": 1216,
+      "fail_reasons": {
+        "R7 아래가 파손주의 · 냉동(최상단 전용) 품목": 439,
+        "R6 아래가 적층 불가 품목": 288,
+        "R1 남은 공간 부족": 193,
+        "R7 최상단 배치": 171,
+        "R5 지지면 부족": 107
+      },
+      "declared_fail": 0,
+      "avg_vol_pct": 28.7,
+      "avg_wt_pct": 55.8,
+      "trucks": {
+        "5톤 윙바디": 1223,
+        "25톤 무진동": 1303,
+        "11톤 탑차": 2552,
+        "11톤 냉동탑차": 854,
+        "2.5톤 카고": 736,
+        "1톤 카고": 271,
+        "5톤 냉동탑차": 353
+      },
+      "bigger_truck_vs_base": 52,
+      "lost_vs_base": 42,
+      "ms_avg": 578.7,
+      "ms_p95": 2885.1,
+      "real": {
+        "-5:5": {
+          "checked": 7292,
+          "any": 15,
+          "top": 0,
+          "over": 0,
+          "axle": 15,
+          "worst": 0.0,
+          "buckets": {},
+          "rate": 0.21
+        },
+        "-5:10": {
+          "checked": 7292,
+          "any": 55,
+          "top": 0,
+          "over": 23,
+          "axle": 32,
+          "worst": 0.0,
+          "buckets": {},
+          "rate": 0.75
+        },
+        "-15:15": {
+          "checked": 7292,
+          "any": 187,
+          "top": 90,
+          "over": 52,
+          "axle": 45,
+          "worst": 3.0,
+          "buckets": {
+            "≤2%": 70,
+            "2~5%": 20
+          },
+          "rate": 2.56
+        }
+      },
+      "bad": {
+        "overload": {
+          "injected": 244,
+          "blocked": 244,
+          "reasons": {
+            "R10 축중량 균형": 244,
+            "R4 최대 적재중량 초과": 128,
+            "R9 안전율 한도 초과": 116
+          }
+        },
+        "eccentric": {
+          "injected": 223,
+          "blocked": 223,
+          "reasons": {
+            "R10 축중량 균형": 223
+          }
+        },
+        "top_load": {
+          "injected": 260,
+          "blocked": 260,
+          "reasons": {
+            "R6 아래 품목의 상부 허용하중 초과": 260
+          }
+        },
+        "nostack": {
+          "injected": 243,
+          "blocked": 243,
+          "reasons": {
+            "R6 아래가 적층 불가 품목": 243
+          }
+        },
+        "cold_mismatch": {
+          "injected": 277,
+          "blocked": 277,
+          "reasons": {
+            "R0 차량-화물 호환": 277,
+            "R4 최대 적재중량 초과": 31,
+            "R1 남은 공간 부족": 11
+          }
+        },
+        "oversize": {
+          "injected": 245,
+          "blocked": 245,
+          "reasons": {
+            "R9 안전율 한도 초과": 245
+          }
+        }
+      }
+    },
+    "0.15": {
+      "clean": 8508,
+      "ok": 7282,
+      "fail": 1226,
+      "fail_reasons": {
+        "R7 아래가 파손주의 · 냉동(최상단 전용) 품목": 432,
+        "R6 아래가 적층 불가 품목": 288,
+        "R1 남은 공간 부족": 193,
+        "R7 최상단 배치": 169,
+        "R5 지지면 부족": 123
+      },
+      "declared_fail": 0,
+      "avg_vol_pct": 28.6,
+      "avg_wt_pct": 55.6,
+      "trucks": {
+        "5톤 윙바디": 1219,
+        "25톤 무진동": 1297,
+        "11톤 탑차": 2549,
+        "11톤 냉동탑차": 859,
+        "2.5톤 카고": 738,
+        "1톤 카고": 266,
+        "5톤 냉동탑차": 354
+      },
+      "bigger_truck_vs_base": 92,
+      "lost_vs_base": 62,
+      "ms_avg": 588.0,
+      "ms_p95": 2953.8,
+      "real": {
+        "-5:5": {
+          "checked": 7282,
+          "any": 16,
+          "top": 0,
+          "over": 0,
+          "axle": 16,
+          "worst": 0.0,
+          "buckets": {},
+          "rate": 0.22
+        },
+        "-5:10": {
+          "checked": 7282,
+          "any": 58,
+          "top": 0,
+          "over": 23,
+          "axle": 35,
+          "worst": 0.0,
+          "buckets": {},
+          "rate": 0.8
+        },
+        "-15:15": {
+          "checked": 7282,
+          "any": 98,
+          "top": 0,
+          "over": 50,
+          "axle": 48,
+          "worst": 0.0,
+          "buckets": {},
+          "rate": 1.35
+        }
+      },
+      "bad": {
+        "overload": {
+          "injected": 244,
+          "blocked": 244,
+          "reasons": {
+            "R10 축중량 균형": 244,
+            "R4 최대 적재중량 초과": 128,
+            "R9 안전율 한도 초과": 116
+          }
+        },
+        "eccentric": {
+          "injected": 223,
+          "blocked": 223,
+          "reasons": {
+            "R10 축중량 균형": 223
+          }
+        },
+        "top_load": {
+          "injected": 260,
+          "blocked": 260,
+          "reasons": {
+            "R6 아래 품목의 상부 허용하중 초과": 260
+          }
+        },
+        "nostack": {
+          "injected": 243,
+          "blocked": 243,
+          "reasons": {
+            "R6 아래가 적층 불가 품목": 243
+          }
+        },
+        "cold_mismatch": {
+          "injected": 277,
+          "blocked": 277,
+          "reasons": {
+            "R0 차량-화물 호환": 277,
+            "R4 최대 적재중량 초과": 31,
+            "R1 남은 공간 부족": 11
+          }
+        },
+        "oversize": {
+          "injected": 245,
+          "blocked": 245,
+          "reasons": {
+            "R9 안전율 한도 초과": 245
+          }
+        }
+      }
+    }
+  }
+}

@@ -99,6 +99,9 @@ class MatchingMixin:
         return sum(1 for e in o["match_log"] if e["event"] == "offered")
 
     def _pending_offer_of(self, driver_id: str) -> dict | None:
+        idx = getattr(self, "_driver_index", None)   # 매칭 라운드 중이면 미리 정리한 색인 사용
+        if idx is not None:
+            return idx["offer"].get(driver_id)
         return next((o for o in self.orders.values()
                      if o["status"] == "MATCHING" and o["offer"] and o["offer"]["driver_id"] == driver_id), None)
 
@@ -148,14 +151,41 @@ class MatchingMixin:
         cached = getattr(self, "_rates_cache", None)
         if cached is not None:
             return cached
+        # 매칭 기록을 한 번만 훑어 기사별 응답 · 수락 수를 센다 (기사마다 전체를 다시 훑지 않음)
+        answered: dict[str, int] = {}
+        accepted: dict[str, int] = {}
+        for o in self.orders.values():
+            for e in o["match_log"]:
+                if e["event"] in ("accepted", "declined", "expired"):
+                    did = e["driver_id"]
+                    answered[did] = answered.get(did, 0) + 1
+                    accepted[did] = accepted.get(did, 0) + (e["event"] == "accepted")
         rates = {}
-        for d in self.drivers.values():
-            r = self._driver_offer_stats(d["id"])["accept_rate"]
-            rates[d["id"]] = r / 100 if r is not None else 0.7
+        for did in self.drivers:
+            n = answered.get(did, 0)
+            rates[did] = round(100 * accepted[did] / n, 1) / 100 if n else 0.7
         return rates
+
+    def _all_region_history(self) -> dict[str, tuple[list[str], list[str]]]:
+        """전체 기사의 수락 · 거절 상차 권역을 한 번에 (매칭 라운드 동안 재사용)."""
+        out: dict[str, tuple[list[str], list[str]]] = {}
+        for o in self.orders.values():
+            region = None
+            for e in o["match_log"]:
+                kind = (0 if e["event"] in ("accepted", "picked", "assigned")
+                        else 1 if e["event"] in ("declined", "expired") else None)
+                if kind is None or not e["driver_id"]:
+                    continue
+                region = region or pricing_engine.region_of(o["origin"])
+                out.setdefault(e["driver_id"], ([], []))[kind].append(region)
+        return out
 
     def _region_history(self, driver_id: str) -> tuple[list[str], list[str]]:
         """기사가 수락 · 거절한 화물의 상차 권역 목록 (cf_score 입력)."""
+        cached = getattr(self, "_region_cache", None)
+        if cached is not None:
+            acc, dec = cached.get(driver_id, ([], []))
+            return list(acc), list(dec)
         acc, dec = [], []
         for o in self.orders.values():
             for e in o["match_log"]:
@@ -279,10 +309,14 @@ class MatchingMixin:
                 return
             t0 = time.perf_counter()
             self._rates_cache = self._accept_rates()
+            self._region_cache = self._all_region_history()
+            self._driver_index = self._build_driver_index()   # 후보 평가 동안 화물 상태는 바뀌지 않는다
             try:
                 evals = {o["id"]: self._evaluate(o) for o in pending}
             finally:
                 self._rates_cache = None
+                self._region_cache = None
+                self._driver_index = None
             rankings = {oid: self._ranking(rows) for oid, rows in evals.items()}
             score = {(oid, r["id"]): r["score"] for oid, ranking in rankings.items() for r in ranking}
             order_ids = [o["id"] for o in pending]
@@ -334,12 +368,16 @@ class MatchingMixin:
         hk = [km[(o, d)] for o, d, _ in pairs]
         gk = [km[(o, d)] for o, d, _ in greedy]
         h_avg, g_avg = (mean(hk) if hk else None), (mean(gk) if gk else None)
-        reduction = round((g_avg - h_avg) / g_avg * 100, 1) if h_avg is not None and g_avg else None
         # KPI 기준선: 같은 후보 안에서 '단순 최단거리 매칭'(등록 순서 · 가장 가까운 공차) 했을 때의 평균 공차 거리
         near = hungarian.nearest([o["id"] for o in pending], sorted({d for _, d in km}), km)
         nk = [k for *_, k in near]
         n_avg = mean(nk) if nk else None
-        vs_near = round((n_avg - h_avg) / n_avg * 100, 1) if h_avg is not None and n_avg else None
+        # 선택지가 있는 라운드만 비교: 어떤 화물에 후보가 2명 이상이거나, 어떤 기사가 화물 2건 이상의 후보일 때.
+        # (화물 1건 × 기사 1명처럼 고를 게 없으면 어떤 방식이든 같은 기사 → 단축률 0% 가 평균을 왜곡)
+        has_choice = len(km) > min(len({o for o, _ in km}), len({d for _, d in km})) if km else False
+        reduction = (round((g_avg - h_avg) / g_avg * 100, 1)
+                     if has_choice and h_avg is not None and g_avg else None)
+        vs_near = round((n_avg - h_avg) / n_avg * 100, 1) if has_choice and h_avg is not None and n_avg else None
         filtered = sum(1 for rows in evals.values() for r in rows
                        if r["fits"] and not r["busy"] and r["in_radius"] and r["lgb_pass"] is False)
         self._metric_seq = getattr(self, "_metric_seq", len(logs)) + 1
@@ -351,7 +389,7 @@ class MatchingMixin:
                      "deadhead_reduction_pct": reduction, "threshold_filtered": filtered,
                      "nearest_assigned": len(near),
                      "nearest_avg_km": round(n_avg, 2) if n_avg is not None else None,
-                     "deadhead_vs_nearest_pct": vs_near,
+                     "deadhead_vs_nearest_pct": vs_near, "candidate_pairs": len(km), "has_choice": has_choice,
                      "failed": sum(1 for o in pending if not rankings[o["id"]])})
         del logs[:-500]  # 최근 500 라운드만 유지
 
@@ -360,9 +398,11 @@ class MatchingMixin:
         logs = self.metrics_log
         lat = sorted(e["latency_ms"] for e in logs)
         p95 = lat[min(len(lat) - 1, int(round(0.95 * (len(lat) - 1))))] if lat else None
-        red = [e["deadhead_reduction_pct"] for e in logs if e["deadhead_reduction_pct"] is not None and e["assigned"]]
+        # 공차 거리 비교는 선택지가 있던 라운드만 (예전 기록은 후보 기사 2명 이상이면 선택지가 있던 것으로 본다)
+        comparable = [e for e in logs if e["assigned"] and e.get("has_choice", e.get("drivers", 0) >= 2)]
+        red = [e["deadhead_reduction_pct"] for e in comparable if e["deadhead_reduction_pct"] is not None]
         # 단순 최단거리 기준선 대비: 라운드별 평균 상차 거리를 배정 건수로 가중해 합친다
-        nr = [e for e in logs if e.get("deadhead_vs_nearest_pct") is not None and e["assigned"]]
+        nr = [e for e in comparable if e.get("deadhead_vs_nearest_pct") is not None]
         h_km = sum(e["hungarian_avg_km"] * e["assigned"] for e in nr)
         n_km = sum(e["nearest_avg_km"] * e["nearest_assigned"] for e in nr)
         n_cnt, h_cnt = sum(e["nearest_assigned"] for e in nr), sum(e["assigned"] for e in nr)
@@ -378,6 +418,7 @@ class MatchingMixin:
             "empty_deadhead_km_reduction_pct": round(mean(red), 1) if red else None,
             "deadhead_vs_nearest_pct": vs_near,
             "target_deadhead_vs_nearest_pct": 10.0,
+            "comparable_rounds": len(nr),          # 공차 거리 비교에 쓴 라운드 수 (선택지가 있던 라운드)
             "rejection_rate_pct": round(100 * len(rejected) / len(answered), 1) if answered else None,
             "threshold_filtered": sum(e["threshold_filtered"] for e in logs),
             "ml_threshold": ML_THRESHOLD,
@@ -388,10 +429,28 @@ class MatchingMixin:
     BENCHMARK_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data",
                                   "benchmark_metrics.json")
 
-    def _benchmark(self) -> dict | None:
-        """tests/stress_test.py --out 결과 (backend/data 사본). 실시간으로 정답을 알 수 없는 지표에 쓴다."""
+    LARGE_BENCHMARK_FILE = os.path.join(os.path.dirname(BENCHMARK_FILE), "benchmark_large.json")
+    PACKING_BENCHMARK_FILE = os.path.join(os.path.dirname(BENCHMARK_FILE), "benchmark_packing.json")
+
+    def _packing_benchmark(self) -> tuple[dict | None, dict | None]:
+        """적재 전용 대량 스트레스 테스트 사본 (tests/packing_stress.py · 무작위 화물 10,000건) → (전체, 현재 여유값 결과).
+        적재 · 과적 KPI 의 측정 기준 — 지금 설정된 상부 허용하중 여유(top_load_margin)와 같은 값으로 잰 결과를 쓴다."""
         try:
-            with open(self.BENCHMARK_FILE, encoding="utf-8") as f:
+            with open(self.PACKING_BENCHMARK_FILE, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return None, None
+        from ..config import settings as app_settings
+        bm = d.get("by_margin") or {}
+        key = next((k for k in bm if abs(float(k) - app_settings.top_load_margin) < 1e-6), None)
+        return d, (bm[key] if key else None)
+
+    def _benchmark(self, large: bool = False) -> dict | None:
+        """스트레스 테스트 결과 사본 (backend/data).
+        기본(시드 7 · 하루 118건): GPS 오알람처럼 실시간으로 정답을 알 수 없는 지표
+        대규모(--preset 8k · 8,008건): 매칭 · 적재 KPI 의 측정 기준"""
+        try:
+            with open(self.LARGE_BENCHMARK_FILE if large else self.BENCHMARK_FILE, encoding="utf-8") as f:
                 return json.load(f)
         except (OSError, ValueError):
             return None
@@ -400,6 +459,10 @@ class MatchingMixin:
         """구현 단계별 현실적 KPI 8개: 업계 표준 · 목표 · 현재 값 · 판정 · 근거."""
         m = self.matching_metrics()
         bench = self._benchmark()
+        large = self._benchmark(large=True)
+        lk = {r["key"]: r for r in (large or {}).get("kpi", [])}   # 대규모 실행의 KPI 판정값
+        n_large = (large or {}).get("attempts")
+        src_large = f"스트레스 테스트 {n_large:,}건" if n_large else None
         rows = []
 
         # 1) 가입 검증 자동화율: 화주 · 차주 가입 신청은 모두 규칙 엔진이 자동 판정하고 감사 로그에 남긴다
@@ -423,26 +486,77 @@ class MatchingMixin:
             violations += bool(p.get("unplaced") or any(c["status"] == "fail" for c in p["constraints"]))
         b_note = (f" · 스트레스 테스트 {bench['packing_checked']}건 중 위반 {bench['packing_violations']}건"
                   if bench and "packing_checked" in bench else "")
-        rows.append(kpi_engine.evaluate(
-            "packing_violation_pct", round(100 * violations / checked, 2) if checked else None,
-            source="실시간 (배정 차량 재검증)", basis=f"배차 확정 {checked}건 재검증 · 위반 {violations}건{b_note}"))
+        bc = (bench or {}).get("bad_cargo")
+        if bc:
+            b_note += (f" · 위반 화물 주입 {sum(bc['injected'].values())}건 → 차단 {sum(bc['blocked'].values())}건 "
+                       f"(놓침 {bc['missed']})")
+        live_note = f"실시간 배차 확정 {checked}건 재검증 · 위반 {violations}건"
+        pk, pm = self._packing_benchmark()
+        if pm and pm.get("ok"):
+            bad_b = sum(v["blocked"] for v in pm["bad"].values())
+            bad_n = sum(v["injected"] for v in pm["bad"].values())
+            real = (pm.get("real") or {}).get("-5:10") or next(iter((pm.get("real") or {}).values()), {})
+            over = (f" · 실제 무게(신고 대비 −5 ~ +10%) 과적 {real['over']}건 "
+                    f"({100 * real['over'] / real['checked']:.2f}%) · 현실 위험률 {real.get('rate')}%"
+                    if real and real.get("checked") else "")
+            rows.append(kpi_engine.evaluate(
+                "packing_violation_pct", round(100 * pm["declared_fail"] / pm["ok"], 2),
+                source=f"적재 스트레스 테스트 {pk.get('cases', 0):,}건",
+                basis=f"무작위 정상 화물 {pm['clean']:,}건 중 등록 {pm['ok']:,}건 재검증 · 위반 {pm['declared_fail']}건 "
+                      f"(신고 무게 기준 · 과적 0건) · 위반 화물 6종 {bad_n:,}건 → 차단 {bad_b:,}건{over} · "
+                      f"참고: {live_note}"))
+        elif "packing_violation_pct" in lk:
+            bc_l = large.get("bad_cargo") or {}
+            rows.append(kpi_engine.evaluate(
+                "packing_violation_pct", lk["packing_violation_pct"]["value"], source=src_large,
+                basis=f"배차 {large.get('packing_checked', 0):,}건 재검증 · 위반 {large.get('packing_violations', 0)}건 · "
+                      f"위반 화물 주입 {sum((bc_l.get('injected') or {}).values()):,}건 → 차단 "
+                      f"{sum((bc_l.get('blocked') or {}).values()):,}건 · 정상 화물 오차단 "
+                      f"{bc_l.get('clean_blocked', 0)}/{bc_l.get('clean_checked', 0):,} · 참고: {live_note}"))
+        else:
+            rows.append(kpi_engine.evaluate(
+                "packing_violation_pct", round(100 * violations / checked, 2) if checked else None,
+                source="실시간 (배정 차량 재검증)", basis=f"{live_note}{b_note}"))
 
         # 3) 배차 지연 p95 · 4) 거절률 · 5) 단순 최단거리 대비 공차 거리 단축률 (매칭 라운드 로그)
-        rows.append(kpi_engine.evaluate(
-            "dispatch_p95_sec", m["dispatch_latency_p95_sec"], source="실시간 (매칭 라운드)",
-            basis=f"배정 라운드 {m['rounds']}회 · 평가 + 헝가리안 배정 소요"))
+        live_p95 = m["dispatch_latency_p95_sec"]
+        if "dispatch_p95_sec" in lk:
+            rows.append(kpi_engine.evaluate(
+                "dispatch_p95_sec", lk["dispatch_p95_sec"]["value"], source=src_large,
+                basis=f"배정 라운드 {large.get('rounds', 0):,}회 · 기사 {large.get('drivers', 0)}명"
+                      + (f" · 참고: 실시간 {live_p95:.2f}초 ({m['rounds']}회)" if live_p95 is not None else "")))
+        else:
+            rows.append(kpi_engine.evaluate(
+                "dispatch_p95_sec", live_p95, source="실시간 (매칭 라운드)",
+                basis=f"배정 라운드 {m['rounds']}회 · 평가 + 헝가리안 배정 소요"))
         answered = sum(1 for o in self.orders.values() for e in o["match_log"]
                        if e["event"] in ("accepted", "declined", "expired"))
-        rows.append(kpi_engine.evaluate(
-            "rejection_rate_pct", m["rejection_rate_pct"], source="실시간 (제안 응답)",
-            basis=f"응답 {answered}건 · 거절 + 무응답 비율"))
-        nr = [e for e in m["recent"] if e.get("deadhead_vs_nearest_pct") is not None]
+        if "rejection_rate_pct" in lk:
+            rows.append(kpi_engine.evaluate(
+                "rejection_rate_pct", lk["rejection_rate_pct"]["value"], source=src_large,
+                basis=f"제안 {large.get('offers', 0):,}건 · 거절 {large.get('declined', 0):,}건"
+                      + (f" · 참고: 실시간 {m['rejection_rate_pct']}% (응답 {answered}건)"
+                         if m["rejection_rate_pct"] is not None else "")))
+        else:
+            rows.append(kpi_engine.evaluate(
+                "rejection_rate_pct", m["rejection_rate_pct"], source="실시간 (제안 응답)",
+                basis=f"응답 {answered}건 · 거절 + 무응답 비율"))
+        nr = [e for e in m["recent"] if e.get("deadhead_vs_nearest_pct") is not None
+              and e.get("has_choice", e.get("drivers", 0) >= 2)]
         last = nr[0] if nr else None
-        rows.append(kpi_engine.evaluate(
-            "deadhead_vs_nearest_pct", m["deadhead_vs_nearest_pct"], source="실시간 (매칭 라운드)",
-            basis=(f"최근 라운드 헝가리안 {last['hungarian_avg_km']}km vs 최단거리 기준선 {last['nearest_avg_km']}km"
-                   if last else "비교 가능한 배정 라운드 없음 (기준선 공차 거리 0km 포함)")
-            + " · 같은 후보 기사 안에서 비교"))
+        vb = ((large or {}).get("detail") or {}).get("vs_baselines") or {}
+        if "deadhead_vs_nearest_pct" in lk:
+            rows.append(kpi_engine.evaluate(
+                "deadhead_vs_nearest_pct", lk["deadhead_vs_nearest_pct"]["value"], source=src_large,
+                basis=(f"헝가리안 {vb.get('hungarian_avg_km')}km vs 최단거리 {vb.get('nearest_avg_km')}km · "
+                       f"선택지 있던 라운드 {vb.get('comparable_rounds')}/{vb.get('all_rounds')}")
+                + (f" · 참고: 실시간 {m['deadhead_vs_nearest_pct']}%" if m["deadhead_vs_nearest_pct"] is not None else "")))
+        else:
+            rows.append(kpi_engine.evaluate(
+                "deadhead_vs_nearest_pct", m["deadhead_vs_nearest_pct"], source="실시간 (매칭 라운드)",
+                basis=(f"최근 라운드 헝가리안 {last['hungarian_avg_km']}km vs 최단거리 기준선 {last['nearest_avg_km']}km"
+                       if last else "비교 가능한 배정 라운드 없음 (후보가 1명뿐인 라운드는 제외)")
+                + f" · 선택지가 있던 라운드 {m['comparable_rounds']}회 · 같은 후보 기사 안에서 비교"))
 
         # 6) 경로 이탈 오알람률: 실시간으로는 '진짜 이탈'인지 정답이 없어 스트레스 테스트(정답 있는 시나리오)로 판정
         g = (bench or {}).get("gps")
@@ -474,7 +588,9 @@ class MatchingMixin:
             basis=f"결제 시도 {tried}건 · 승인 {ok_pg}건 · 모의 PG(실제 출금 없음)" if tried else "아직 결제 없음"))
 
         return {"rows": rows, "summary": kpi_engine.summary(rows),
-                "benchmark_at": (bench or {}).get("generated_at")}
+                "benchmark_at": (bench or {}).get("generated_at"),
+                "large_benchmark_at": (large or {}).get("generated_at"), "large_attempts": n_large,
+                "packing_benchmark_at": (pk or {}).get("generated_at"), "packing_cases": (pk or {}).get("cases")}
 
     def _matching_tick(self):
         """제안 시간 초과 처리 → 제안이 없는 매칭 대기 화물(실패 포함) 전체를 헝가리안으로 다시 배정."""

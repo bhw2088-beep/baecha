@@ -48,6 +48,7 @@ class Options:
     min_support: float = 0.8       # R5 바닥 면적 대비 지지 비율
     lifo: bool = True              # R8
     safety_margin: float = 0.0     # R9 (서비스가 config.safety_margin 을 넣어 줌 · 0 = 한도 없음)
+    top_load_margin: float = 0.0   # R6 상부 허용하중 여유 (서비스가 config.top_load_margin 을 넣어 줌 · 0.1 = 90% 까지만)
     balance: bool = True           # R10 좌우 균형 자리 선택
     record_steps: bool = True
     max_step_snapshots: int = 400
@@ -252,7 +253,9 @@ class EPPacker:
             f = (weight[i] + load[i]) / tot
             for j, a in lst:
                 load[j] += f * a
-        caps = [p.box.cap for p in self.placed] + [box.cap]
+        # R6: 허용하중 × (1 − 여유) 까지만 — 신고 무게가 실제보다 가벼워도 아래 상자가 견디게
+        k_cap = 1 - max(0.0, self.o.top_load_margin)
+        caps = [p.box.cap * k_cap for p in self.placed] + [box.cap * k_cap]
         if any(load[i] > caps[i] + EPS for i in range(n)):
             return None
         return load

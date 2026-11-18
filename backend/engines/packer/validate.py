@@ -20,7 +20,8 @@ def _overlap_1d(a0, a1, b0, b1):
 
 
 def validate(container: Container, rows: list[dict], *, min_support: float, lifo: bool,
-             cold_chain: bool = False, safety_margin: float = 0.10) -> list[dict]:
+             cold_chain: bool = False, safety_margin: float = 0.05, top_load_margin: float = 0.10) -> list[dict]:
+    """top_load_margin: R6 상부 허용하중 여유 (0.1 = 허용하중의 90% 까지). 물리 한계 그대로 보려면 0."""
     c = container
     n = len(rows)
     box = [(r["x"], r["x"] + r["length"], r["y"], r["y"] + r["width"], r["z"], r["z"] + r["height"]) for r in rows]
@@ -93,12 +94,16 @@ def validate(container: Container, rows: list[dict], *, min_support: float, lifo
         cap = 0.0 if not r["stackable"] else r["max_top_load"]
         if cap is None:
             continue
+        cap = cap * (1 - max(0.0, top_load_margin))
         if load[j] > cap + EPS:
             bad.append(ids[j])
         if cap > 0:
             worst = max(worst, load[j] / cap)
-    add("stacking", bad, f"최대 하중 사용률 {worst:.0%}" if worst else "하중 제한 품목 위 적재 없음",
-        f"{len(bad)}개 상자가 허용하중 초과/적층 불가 품목 위 적재")
+    pct = f"{1 - max(0.0, top_load_margin):.0%}"
+    add("stacking", bad, f"최대 하중 사용률 {worst:.0%} (한도 {pct} 기준)" if worst else "하중 제한 품목 위 적재 없음",
+        f"{len(bad)}개 상자가 허용하중 초과/적층 불가 품목 위 적재",
+        rule=f"적층 불가 품목 위 적재 금지, 상부 하중 ≤ 허용하중의 {pct}" + (" (안전 여유)" if top_load_margin else ""))
+    checks[-1]["worst_ratio"] = round(worst, 4)  # 상부 하중 / 허용하중 최댓값 (1 초과 = 초과 정도)
 
     # R7 파손주의 · 냉동 화물 최상단 배치 강제 — 표시된 상자 위(바닥 면적이 겹치는 더 높은 곳)에 다른 상자가 있으면 위반
     tops = [i for i, r in enumerate(rows) if r.get("fragile") or r.get("frozen")]
@@ -138,7 +143,7 @@ def validate(container: Container, rows: list[dict], *, min_support: float, lifo
     add("lifo", bad, f"하차지 {len(drops)}곳 · 막힘 없음" if lifo else "검사 꺼짐",
         f"{len(set(bad))}개 상자가 하차 순서상 가로막힘", rule=access)
 
-    # R9 보수적 안전율 (engines/validation_engine.py) — 포장 · 측정 오차 감안, 용량의 90% 초과 시 차단
+    # R9 보수적 안전율 (engines/validation_engine.py) — 포장 · 측정 오차 감안, 용량의 95% 초과 시 차단 (90% 초과 경고)
     vol_util = sum(r["length"] * r["width"] * r["height"] for r in rows) / c.volume if c.volume else 0
     wt_util = total / c.max_weight if c.max_weight else 0
     sc = safety_check(vol_util, wt_util, safety_margin)

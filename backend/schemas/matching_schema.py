@@ -34,6 +34,8 @@ class RoundLogOut(BaseModel):
     nearest_assigned: int | None = None          # 단순 최단거리 기준선 배정 수
     nearest_avg_km: float | None = None          # 단순 최단거리 기준선 평균 상차(공차) 거리
     deadhead_vs_nearest_pct: float | None = None  # 기준선 대비 공차 거리 단축률
+    candidate_pairs: int | None = None           # 후보 (화물, 기사) 쌍 수
+    has_choice: bool | None = None               # 선택지가 있던 라운드인가 (공차 거리 비교 대상)
 
 
 class MatchingMetricsOut(BaseModel):
@@ -45,6 +47,7 @@ class MatchingMetricsOut(BaseModel):
     empty_deadhead_km_reduction_pct: float | None   # 헝가리안 vs 점수순 그리디
     deadhead_vs_nearest_pct: float | None = None    # 헝가리안 vs 단순 최단거리 매칭 (KPI 기준선)
     target_deadhead_vs_nearest_pct: float = 10.0
+    comparable_rounds: int = 0                       # 공차 거리 비교에 쓴 라운드 수
     rejection_rate_pct: float | None
     threshold_filtered: int
     ml_threshold: float

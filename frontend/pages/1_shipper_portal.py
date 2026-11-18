@@ -542,7 +542,7 @@ def new_order_page():
                                help="상자 바닥 면적 중 아래 상자/바닥에 닿아야 하는 비율 (공중 부양 방지)") / 100
         lifo = e.toggle("R8 하차 순서(LIFO) 규칙", value=True, key="no_lifo",
                         help="먼저 내릴 화물의 위·앞(뒷문 쪽)을 나중에 내릴 화물이 막지 않게 함")
-        f.caption("R9 안전율 · R10 좌우 균형은 항상 적용 — 한도(90%)까지만 싣고, 같은 줄 양쪽 중 무게중심이 "
+        f.caption("R9 안전율 · R10 좌우 균형은 항상 적용 — 한도(95%)까지만 싣고, 같은 줄 양쪽 중 무게중심이 "
                   "가운데로 오는 쪽에 놓습니다.")
         request = {"items": items, "truck_type": None if truck_sel == "AUTO" else truck_sel, "cold_chain": cold,
                    "options": {"merit": merit, "sort": sort, "min_support": min_support, "lifo": lifo}}

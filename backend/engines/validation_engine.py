@@ -3,10 +3,11 @@ Phase 1: 물리적 적재 오탐 방지 규칙 (순수 함수 · pytest 로 독�
 
 EP(Extreme Point) 엔진이 상자를 배치한 뒤, 그 결과를 '보수적으로' 한 번 더 검사한다.
 
-1) 보수적 안전율 (기본 10%, config.safety_margin)
+1) 보수적 안전율 (기본 5%, config.safety_margin)
    실제 박스 포장 오차 · 측정 오차를 감안해 적재함 용량의 일부만 쓴 것으로 본다.
-     부피 · 중량 사용률 > 85%  → 경고 "공간 부족(오탐) 위험"
-     부피 · 중량 사용률 > 90%  → 차단 (1 − 안전율)
+     부피 · 중량 사용률 > (한도 − 5%p) = 90%  → 경고 "공간 부족(오탐) 위험"
+     부피 · 중량 사용률 > (1 − 안전율)  = 95%  → 차단
+   (2026-11-17: 10% → 5% 로 완화 — 너무 방어적이면 더 큰 차만 배정돼 적재율이 떨어진다)
 2) 축중량 균형 (산업안전보건기준에 관한 규칙 제173조 '화물의 편하중 방지' 취지)
    무게중심이 한쪽으로 쏠리면 축 하나에 하중이 몰린다.
      좌우 편차 > 10% 경고 · > 15% 차단
@@ -20,7 +21,7 @@ EP(Extreme Point) 엔진이 상자를 배치한 뒤, 그 결과를 '보수적으
 
 from __future__ import annotations
 
-WARN_RATIO = 0.85
+WARN_GAP = 0.05  # 경고는 차단 한도보다 5%p 아래부터
 
 # 축 위치 (적재함 길이 대비 비율, 0 = 운전석 쪽 끝)
 FRONT_AXLE = -0.15
@@ -31,21 +32,22 @@ def capacity_limit(safety_margin: float) -> float:
     return round(1 - safety_margin, 4)
 
 
-def safety_check(volume_util: float, weight_util: float, safety_margin: float = 0.10) -> dict:
+def safety_check(volume_util: float, weight_util: float, safety_margin: float = 0.05) -> dict:
     """부피 · 중량 사용률 → pass / warn / fail."""
     limit = capacity_limit(safety_margin)
+    warn_at = round(limit - WARN_GAP, 4)
     worst = max(volume_util, weight_util)
     which = "부피" if volume_util >= weight_util else "중량"
     if worst > limit + 1e-9:
         status = "fail"
         detail = f"{which} {worst:.0%} — 안전율 {safety_margin:.0%} 적용 한도 {limit:.0%} 초과 (더 큰 차량 필요)"
-    elif worst > WARN_RATIO + 1e-9:
+    elif worst > warn_at + 1e-9:
         status = "warn"
-        detail = f"{which} {worst:.0%} — 공간 부족(오탐) 위험 구간 ({WARN_RATIO:.0%}~{limit:.0%})"
+        detail = f"{which} {worst:.0%} — 공간 부족(오탐) 위험 구간 ({warn_at:.0%}~{limit:.0%})"
     else:
         status = "pass"
         detail = f"부피 {volume_util:.0%} · 중량 {weight_util:.0%} (한도 {limit:.0%})"
-    return {"status": status, "detail": detail, "limit": limit, "warn_at": WARN_RATIO, "worst": round(worst, 4)}
+    return {"status": status, "detail": detail, "limit": limit, "warn_at": warn_at, "worst": round(worst, 4)}
 
 
 def axle_loads(total_kg: float, cog_x_ratio: float) -> dict:
@@ -88,7 +90,7 @@ def axle_balance(rows: list[dict], length: int, width: int, max_weight: float | 
             "side": side, "light_load": light, **loads}
 
 
-def required_tonnage(total_kg: float, total_volume_mm3: float, trucks: list, safety_margin: float = 0.10,
+def required_tonnage(total_kg: float, total_volume_mm3: float, trucks: list, safety_margin: float = 0.05,
                      cold_chain: bool = False) -> float | None:
     """안전율을 적용해 총중량 · 총부피를 담을 수 있는 가장 작은 표준 차량의 톤수 (없으면 None).
     trucks: Container 목록 (engines/packer/trucks.py)."""

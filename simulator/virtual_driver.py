@@ -8,11 +8,14 @@ Phase 6: 가상 기사 GPS 시뮬레이터 (모의 데이터)
   2) 지난 시간 × 배속(TIME_SCALE) × 속도만큼 경로 위에서 앞으로 이동 (속도 60~98km/h 사이에서 흔들림)
   3) GPS 튀김: 위경도에 가우스 노이즈(Gaussian Jitter, 표준편차 8m)
   4) 고의 이탈 시나리오: SIM_DEVIATION_EVERY 초마다 운행 1대가 경로 옆 2km 로 4번 연속 벗어났다가 복귀
-     → 서버는 연속 3번째 핑에서 정확히 한 번 '경로 이탈' 경고 (디바운싱 검증)
+     → 서버는 연속 3번째 핑에서 정확히 한 번 '경로 이탈' 경고 (디바운싱 검증 · True Positive)
+  4-1) GPS 단발 튐 시나리오: SIM_SPIKE_EVERY 초마다 운행 1대가 1~2번만 경로 옆 2.5km 로 튀었다가 바로 복귀
+     → 연속 3번이 안 되므로 경고가 울리면 안 된다 (오알람 방지 검증 · 이탈 기준 1km 를 넘는 튐이라야 의미가 있음)
   5) POST /tracking/ping/batch (X-Sim-Key) → 서버가 배정 기사 대조 → Redis Streams XADD → 워커 판정
 
 환경변수: API_BASE · SIM_API_KEY · TIME_SCALE · SIM_INTERVAL(2초) · SIM_JITTER_M(8) ·
-          SIM_DEVIATION_EVERY(240초, 0 이면 끔) · SIM_DEVIATION_KM(2.0) · SIM_REOUTSOURCE_EVERY(0=끔, 재위탁 핑 시나리오)
+          SIM_DEVIATION_EVERY(240초, 0 이면 끔) · SIM_DEVIATION_KM(2.0) · SIM_SPIKE_EVERY(90초, 0 이면 끔) ·
+          SIM_SPIKE_KM(2.5) · SIM_REOUTSOURCE_EVERY(0=끔, 재위탁 핑 시나리오)
 실행: docker compose 의 simulator 서비스가 자동 실행
      로컬: python -m simulator.virtual_driver
 """
@@ -36,6 +39,8 @@ JITTER_M = float(os.getenv("SIM_JITTER_M", "8"))
 DEVIATION_EVERY = float(os.getenv("SIM_DEVIATION_EVERY", "240"))
 DEVIATION_KM = float(os.getenv("SIM_DEVIATION_KM", "2.0"))
 DEVIATION_PINGS = 4
+SPIKE_EVERY = float(os.getenv("SIM_SPIKE_EVERY", "90"))
+SPIKE_KM = float(os.getenv("SIM_SPIKE_KM", "2.5"))
 REOUTSOURCE_EVERY = float(os.getenv("SIM_REOUTSOURCE_EVERY", "0"))
 
 
@@ -87,6 +92,7 @@ class VirtualDriver:
         self.speed = run["speed"] or rng.randint(70, 90)
         self.rng = rng
         self.detour = 0  # 남은 고의 이탈 핑 수
+        self.spike = 0   # 남은 단발 튐 핑 수 (1~2)
 
     def step(self, run: dict, dt: float) -> dict:
         self.progress = max(self.progress, run["progress"])  # 서버 쪽 값이 더 앞서 있으면 따라간다
@@ -102,6 +108,10 @@ class VirtualDriver:
             lat, lon = offset(run["route"], i, lat, lon, DEVIATION_KM)
             self.detour -= 1
             tag = "deviation"
+        elif self.spike > 0:
+            lat, lon = offset(run["route"], i, lat, lon, SPIKE_KM)
+            self.spike -= 1
+            tag = "spike"
         lat, lon = jitter(lat, lon, self.rng)
         return {"order_id": self.order_id, "driver_id": self.driver_id or None, "lat": round(lat, 6),
                 "lon": round(lon, 6), "speed": self.speed, "ts": datetime.now().isoformat(timespec="seconds"),
@@ -116,8 +126,10 @@ def main():
     sent, last = 0, time.monotonic()
     next_detour = time.monotonic() + (DEVIATION_EVERY or float("inf"))
     next_foreign = time.monotonic() + (REOUTSOURCE_EVERY or float("inf"))
+    next_spike = time.monotonic() + (SPIKE_EVERY or float("inf"))
     print(f"[virtual_driver] API {API_BASE} · {INTERVAL}s 간격 · 배속 x{TIME_SCALE} · 지터 {JITTER_M}m · "
-          f"고의 이탈 {'매 ' + str(int(DEVIATION_EVERY)) + '초' if DEVIATION_EVERY else '끔'}", flush=True)
+          f"고의 이탈 {'매 ' + str(int(DEVIATION_EVERY)) + '초' if DEVIATION_EVERY else '끔'} · "
+          f"단발 튐 {'매 ' + str(int(SPIKE_EVERY)) + '초' if SPIKE_EVERY else '끔'}", flush=True)
     while True:
         try:
             runs = http.get(f"{API_BASE}/internal/runs", timeout=5).json()
@@ -140,6 +152,13 @@ def main():
             drivers[target].detour = DEVIATION_PINGS
             next_detour = now + DEVIATION_EVERY
             print(f"[virtual_driver] 고의 이탈 시나리오 → {target} ({DEVIATION_KM}km × {DEVIATION_PINGS}회)", flush=True)
+        calm = [r for r in moving if drivers[r["order_id"]].detour == 0]  # 이탈 중인 차량과 겹치지 않게
+        if calm and now >= next_spike:
+            target = rng.choice(calm)["order_id"]
+            drivers[target].spike = rng.randint(1, 2)
+            next_spike = now + SPIKE_EVERY
+            print(f"[virtual_driver] GPS 단발 튐 → {target} ({SPIKE_KM}km × {drivers[target].spike}회, "
+                  "경보 없어야 정상)", flush=True)
         pings = [drivers[r["order_id"]].step(r, dt) for r in runs]
         if pings and now >= next_foreign:
             p = dict(rng.choice(pings))

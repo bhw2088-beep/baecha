@@ -1,0 +1,507 @@
+{
+  "generated_at": "2026-11-17T18:54:53",
+  "seed": 2,
+  "drivers": 400,
+  "orders": 7069,
+  "rounds": 1079,
+  "orders_per_hour": [
+    57,
+    11,
+    46,
+    0,
+    0,
+    11,
+    34,
+    34,
+    102,
+    68,
+    34,
+    46,
+    68,
+    46,
+    57,
+    23,
+    57,
+    34,
+    159,
+    34,
+    23,
+    34,
+    11,
+    11
+  ],
+  "matched": 6509,
+  "match_rate_pct": 92.1,
+  "offers": 6627,
+  "accepted": 6515,
+  "declined": 112,
+  "rejection_rate_pct": 1.7,
+  "dispatch_latency_p95_ms": 336.7,
+  "dispatch_latency_p95_sec": 0.3367,
+  "dispatch_latency_avg_ms": 158.9,
+  "empty_deadhead_km_reduction_pct": 29.8,
+  "deadhead_vs_nearest_pct": 32.2,
+  "threshold_filtered_pairs": 2307,
+  "ml_threshold": 0.75,
+  "packing_checked": 2175,
+  "packing_violations": 0,
+  "bad_cargo": {
+    "rate": 0.12,
+    "injected": {
+      "overload": 480,
+      "eccentric": 459
+    },
+    "blocked": {
+      "overload": 480,
+      "eccentric": 459
+    },
+    "missed": 0,
+    "block_rate_pct": 100.0,
+    "reasons": {
+      "R10 축중량 균형": 939,
+      "R9 안전율 한도 초과": 243,
+      "R4 최대 적재중량 초과": 237
+    },
+    "clean_checked": 2492,
+    "clean_blocked": 0
+  },
+  "overload_rate_pct": 0.0,
+  "gps": {
+    "runs": 8,
+    "spikes": 8,
+    "false_alarms": 0,
+    "deviation_runs": 4,
+    "detected": 4,
+    "alert_ping_index": [
+      3,
+      3,
+      3,
+      3
+    ],
+    "engine": "Shapely",
+    "false_alarm_rate_pct": 0.0
+  },
+  "kpi": [
+    {
+      "key": "dispatch_p95_sec",
+      "name": "배차 지연 시간 (P95)",
+      "target": "< 3.0초",
+      "value": 0.3367,
+      "display": "0.34초",
+      "status": "pass",
+      "basis": "라운드 1079회"
+    },
+    {
+      "key": "rejection_rate_pct",
+      "name": "배차 거절률 (Rejection Rate)",
+      "target": "< 15 ~ 20%",
+      "value": 1.7,
+      "display": "1.7%",
+      "status": "pass",
+      "basis": "제안 6627건 · 거절 112건"
+    },
+    {
+      "key": "deadhead_vs_nearest_pct",
+      "name": "공차 거리 단축률 (단순 최단거리 매칭 대비)",
+      "target": "기준선 대비 10 ~ 15% 단축",
+      "value": 32.2,
+      "display": "32.2%",
+      "status": "pass",
+      "basis": "같은 후보 안에서 등록 순서 · 최단거리 배정과 비교"
+    },
+    {
+      "key": "packing_violation_pct",
+      "name": "물리적 과적 및 적재 오탐 발생률",
+      "target": "0% (룰 엔진 강제 차단)",
+      "value": 0.0,
+      "display": "0.0%",
+      "status": "pass",
+      "basis": "배차 2175건 재검증 · 위반 0건 · 위반 화물 주입 939건 → 차단 939건"
+    },
+    {
+      "key": "gps_false_alarm_pct",
+      "name": "경로 이탈 오알람률 (False Positive)",
+      "target": "< 5%",
+      "value": 0.0,
+      "display": "0.0%",
+      "status": "pass",
+      "basis": "정상 운행 4회 · 단발 튐 8회 · 오알람 0건"
+    }
+  ],
+  "kpi_summary": {
+    "measured": 5,
+    "total": 5,
+    "pass": 5,
+    "warn": 0,
+    "fail": 0
+  },
+  "elapsed_sec": 367.1,
+  "days": 8,
+  "batch": 8,
+  "attempts": 8008,
+  "stopped_by": "건수 제한 8,008건 도달",
+  "expired": 543,
+  "orders_per_day": 1001,
+  "detail": {
+    "by_day": {
+      "1": {
+        "orders": 875,
+        "matched": 869,
+        "match_rate_pct": 99.3,
+        "avg_pickup_km": 4.2
+      },
+      "2": {
+        "orders": 871,
+        "matched": 806,
+        "match_rate_pct": 92.5,
+        "avg_pickup_km": 5.8
+      },
+      "3": {
+        "orders": 900,
+        "matched": 825,
+        "match_rate_pct": 91.7,
+        "avg_pickup_km": 5.0
+      },
+      "4": {
+        "orders": 897,
+        "matched": 843,
+        "match_rate_pct": 94.0,
+        "avg_pickup_km": 6.1
+      },
+      "5": {
+        "orders": 886,
+        "matched": 844,
+        "match_rate_pct": 95.3,
+        "avg_pickup_km": 6.3
+      },
+      "6": {
+        "orders": 867,
+        "matched": 774,
+        "match_rate_pct": 89.3,
+        "avg_pickup_km": 6.4
+      },
+      "7": {
+        "orders": 898,
+        "matched": 786,
+        "match_rate_pct": 87.5,
+        "avg_pickup_km": 5.3
+      },
+      "8": {
+        "orders": 875,
+        "matched": 762,
+        "match_rate_pct": 87.1,
+        "avg_pickup_km": 6.2
+      }
+    },
+    "by_hour": {
+      "00": {
+        "orders": 161,
+        "matched": 153,
+        "match_rate_pct": 95.0,
+        "offers": 169,
+        "rejection_rate_pct": 2.4,
+        "latency_p95_ms": 310.9
+      },
+      "01": {
+        "orders": 105,
+        "matched": 99,
+        "match_rate_pct": 94.3,
+        "offers": 98,
+        "rejection_rate_pct": 2.0,
+        "latency_p95_ms": 129.9
+      },
+      "02": {
+        "orders": 196,
+        "matched": 179,
+        "match_rate_pct": 91.3,
+        "offers": 181,
+        "rejection_rate_pct": 0.6,
+        "latency_p95_ms": 172.8
+      },
+      "03": {
+        "orders": 89,
+        "matched": 87,
+        "match_rate_pct": 97.8,
+        "offers": 96,
+        "rejection_rate_pct": 1.0,
+        "latency_p95_ms": 136.3
+      },
+      "04": {
+        "orders": 57,
+        "matched": 55,
+        "match_rate_pct": 96.5,
+        "offers": 56,
+        "rejection_rate_pct": 0.0,
+        "latency_p95_ms": 154.5
+      },
+      "05": {
+        "orders": 116,
+        "matched": 110,
+        "match_rate_pct": 94.8,
+        "offers": 112,
+        "rejection_rate_pct": 2.7,
+        "latency_p95_ms": 132.3
+      },
+      "06": {
+        "orders": 237,
+        "matched": 229,
+        "match_rate_pct": 96.6,
+        "offers": 225,
+        "rejection_rate_pct": 2.2,
+        "latency_p95_ms": 129.3
+      },
+      "07": {
+        "orders": 165,
+        "matched": 161,
+        "match_rate_pct": 97.6,
+        "offers": 146,
+        "rejection_rate_pct": 2.1,
+        "latency_p95_ms": 128.2
+      },
+      "08": {
+        "orders": 913,
+        "matched": 861,
+        "match_rate_pct": 94.3,
+        "offers": 834,
+        "rejection_rate_pct": 1.6,
+        "latency_p95_ms": 213.9
+      },
+      "09": {
+        "orders": 286,
+        "matched": 263,
+        "match_rate_pct": 92.0,
+        "offers": 290,
+        "rejection_rate_pct": 2.4,
+        "latency_p95_ms": 240.1
+      },
+      "10": {
+        "orders": 217,
+        "matched": 208,
+        "match_rate_pct": 95.9,
+        "offers": 210,
+        "rejection_rate_pct": 0.0,
+        "latency_p95_ms": 259.6
+      },
+      "11": {
+        "orders": 395,
+        "matched": 359,
+        "match_rate_pct": 90.9,
+        "offers": 365,
+        "rejection_rate_pct": 2.2,
+        "latency_p95_ms": 284.7
+      },
+      "12": {
+        "orders": 368,
+        "matched": 350,
+        "match_rate_pct": 95.1,
+        "offers": 347,
+        "rejection_rate_pct": 2.3,
+        "latency_p95_ms": 246.8
+      },
+      "13": {
+        "orders": 375,
+        "matched": 351,
+        "match_rate_pct": 93.6,
+        "offers": 363,
+        "rejection_rate_pct": 2.2,
+        "latency_p95_ms": 248.9
+      },
+      "14": {
+        "orders": 305,
+        "matched": 278,
+        "match_rate_pct": 91.1,
+        "offers": 294,
+        "rejection_rate_pct": 1.4,
+        "latency_p95_ms": 268.8
+      },
+      "15": {
+        "orders": 342,
+        "matched": 313,
+        "match_rate_pct": 91.5,
+        "offers": 313,
+        "rejection_rate_pct": 1.3,
+        "latency_p95_ms": 381.6
+      },
+      "16": {
+        "orders": 320,
+        "matched": 305,
+        "match_rate_pct": 95.3,
+        "offers": 293,
+        "rejection_rate_pct": 1.4,
+        "latency_p95_ms": 304.3
+      },
+      "17": {
+        "orders": 364,
+        "matched": 328,
+        "match_rate_pct": 90.1,
+        "offers": 320,
+        "rejection_rate_pct": 2.5,
+        "latency_p95_ms": 387.1
+      },
+      "18": {
+        "orders": 992,
+        "matched": 897,
+        "match_rate_pct": 90.4,
+        "offers": 916,
+        "rejection_rate_pct": 1.2,
+        "latency_p95_ms": 381.4
+      },
+      "19": {
+        "orders": 301,
+        "matched": 257,
+        "match_rate_pct": 85.4,
+        "offers": 278,
+        "rejection_rate_pct": 1.4,
+        "latency_p95_ms": 383.3
+      },
+      "20": {
+        "orders": 195,
+        "matched": 173,
+        "match_rate_pct": 88.7,
+        "offers": 187,
+        "rejection_rate_pct": 2.1,
+        "latency_p95_ms": 347.7
+      },
+      "21": {
+        "orders": 387,
+        "matched": 333,
+        "match_rate_pct": 86.0,
+        "offers": 367,
+        "rejection_rate_pct": 2.2,
+        "latency_p95_ms": 348.7
+      },
+      "22": {
+        "orders": 80,
+        "matched": 79,
+        "match_rate_pct": 98.8,
+        "offers": 80,
+        "rejection_rate_pct": 1.2,
+        "latency_p95_ms": 206.4
+      },
+      "23": {
+        "orders": 103,
+        "matched": 81,
+        "match_rate_pct": 78.6,
+        "offers": 87,
+        "rejection_rate_pct": 1.1,
+        "latency_p95_ms": 235.6
+      }
+    },
+    "by_hub": {
+      "광주": {
+        "orders": 393,
+        "matched": 389,
+        "match_rate_pct": 99.0,
+        "avg_pickup_km": 0.6
+      },
+      "대구": {
+        "orders": 435,
+        "matched": 426,
+        "match_rate_pct": 97.9,
+        "avg_pickup_km": 0.7
+      },
+      "대전 HUB": {
+        "orders": 1040,
+        "matched": 1020,
+        "match_rate_pct": 98.1,
+        "avg_pickup_km": 3.2
+      },
+      "부산항": {
+        "orders": 1008,
+        "matched": 1008,
+        "match_rate_pct": 100.0,
+        "avg_pickup_km": 1.9
+      },
+      "서울/인천": {
+        "orders": 2535,
+        "matched": 2068,
+        "match_rate_pct": 81.6,
+        "avg_pickup_km": 9.5
+      },
+      "울산": {
+        "orders": 514,
+        "matched": 512,
+        "match_rate_pct": 99.6,
+        "avg_pickup_km": 1.6
+      },
+      "평택항": {
+        "orders": 1144,
+        "matched": 1086,
+        "match_rate_pct": 94.9,
+        "avg_pickup_km": 9.8
+      }
+    },
+    "by_truck": {
+      "11톤 냉동탑차": {
+        "assigned": 2858,
+        "avg_util_pct": 76.5,
+        "avg_pickup_km": 5.7
+      },
+      "5톤 냉동탑차": {
+        "assigned": 850,
+        "avg_util_pct": 97.1,
+        "avg_pickup_km": 6.1
+      },
+      "25톤 무진동": {
+        "assigned": 649,
+        "avg_util_pct": 86.6,
+        "avg_pickup_km": 7.0
+      },
+      "11톤 탑차": {
+        "assigned": 602,
+        "avg_util_pct": 78.1,
+        "avg_pickup_km": 6.1
+      },
+      "1톤 카고": {
+        "assigned": 599,
+        "avg_util_pct": 100.0,
+        "avg_pickup_km": 4.4
+      },
+      "2.5톤 카고": {
+        "assigned": 554,
+        "avg_util_pct": 95.2,
+        "avg_pickup_km": 4.6
+      },
+      "5톤 윙바디": {
+        "assigned": 397,
+        "avg_util_pct": 93.6,
+        "avg_pickup_km": 4.5
+      }
+    },
+    "latency_ms": {
+      "p50": 136.0,
+      "p95": 336.7,
+      "p99": 398.0,
+      "max": 855.1,
+      "rounds": 1079
+    },
+    "pickup_km_hist": {
+      "0~5km": 4882,
+      "5~10km": 397,
+      "10~20km": 488,
+      "20~30km": 237,
+      "30~50km": 505,
+      "50km 이상": 0
+    },
+    "util_hist": {
+      "0~40%": 109,
+      "40~60%": 1121,
+      "60~80%": 1195,
+      "80~90%": 0,
+      "90% 이상": 4084
+    },
+    "vs_baselines": {
+      "comparable_rounds": 965,
+      "all_rounds": 1079,
+      "hungarian_avg_km": 6.37,
+      "nearest_avg_km": 9.39,
+      "vs_nearest_pct": 32.2,
+      "vs_greedy_pct_mean": 29.8
+    },
+    "fail_reasons": {
+      "만료 (대기 시간 초과)": 543,
+      "반경 안 공차 없음": 11,
+      "배정 대기 중": 6
+    }
+  }
+}

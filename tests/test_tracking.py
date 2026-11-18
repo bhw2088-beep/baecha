@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from _check import check, finish, section
 
+from backend.config import settings
 from backend.core.database import Store
 from backend.core.errors import ApiError
 from backend.engines import tracking_engine as te
@@ -134,5 +135,22 @@ store.reviews["REV-HIST-9-S"] = {"id": "REV-HIST-9-S", "order_id": "HIST-9", "fr
 store._auto_blacklist("D-007", datetime.now())
 check("3건째 평균 3점 미만 → 자동 이용 제한", d7.get("blacklisted") is True, store.driver_rating("D-007")["avg"])
 check("이용 제한 기사는 배차 불가", not store.driver_dispatchable(d7))
+
+section("데모 자동 하차 완료 (DEMO_AUTO_DELIVER)")
+st2 = Store()
+run = next(o for o in st2.orders.values() if o["status"] == "IN_TRANSIT" and not st2._open_anomaly(o["id"], "STAGNATION"))
+run["progress"] = 98.0
+st2.tick()
+check("스위치 꺼짐 → 자동 완료 안 함", run["status"] == "IN_TRANSIT")
+settings.demo_auto_deliver = True
+try:
+    st2.tick()
+finally:
+    settings.demo_auto_deliver = False
+drv = st2.drivers[run["driver_id"]]
+check("도착(97% 이상) → 자동 하차 완료 · 인수증", run["status"] == "DELIVERED" and run["pod"]["photo"].get("auto"),
+      run["pod"]["hash"])
+check("기사 위치 = 방금 하차지 (다음 배차 출발점)", drv["location"] == run["destination"], drv["location"])
+check("기사가 다시 공차 (운행 없음)", st2._active_run_of(drv["id"]) is None)
 
 finish()

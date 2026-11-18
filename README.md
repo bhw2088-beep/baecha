@@ -28,6 +28,7 @@ docker compose up --build -d    # db · redis · backend · worker · simulator 
 | http://localhost:8000/m/ | 차주용 휴대폰 3D 적재 가이드 (휴대폰: `http://<PC IP>:8000/m/`) |
 
 데모 계정 (비밀번호 `baecha1234`): 화주 `logistics@samsung.com` · 차주 `driver.kim@baecha.co.kr` · 관제 `admin.control@baecha.co.kr`
+관제 계정은 **관제센터 전용 로그인** http://localhost:8501/?mode=control 에서만 접속합니다 (일반 로그인 화면 · 회원가입에는 관제 메뉴 없음).
 VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/실행방법.md](docs/실행방법.md)** 를 보세요.
 적재 · 매칭 · 관제 핵심 코드와 측정값은 **[docs/주요코드_설명.md](docs/주요코드_설명.md)** 에 정리했습니다.
 
@@ -67,7 +68,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 | Phase | 내용 | 주요 파일 |
 |---|---|---|
 | 0 | 사업자 Mod-10 · 국세청 API(선택) · 노란 번호판 · 필수 서류 3종 · prod compose | `engines/compliance_engine.py`, `docker-compose.prod.yml` |
-| 1 | 안전율 85/90% · 축중량(산안법 173조) · 필수 최소 톤수 · 날씨/수급 서지 · 포아송 주문 | `engines/validation_engine.py`, `engines/pricing_engine.py`, `simulator/virtual_shipper.py` |
+| 1 | 안전율 90/95%(경고/차단) · 축중량(산안법 173조) · 필수 최소 톤수 · 날씨/수급 서지 · 포아송 주문 | `engines/validation_engine.py`, `engines/pricing_engine.py`, `simulator/virtual_shipper.py` |
 | 2 | 하드 필터 · cf_score · LightGBM 10피처 · 0.75 임계값 · 매칭 메트릭스 | `engines/matcher/cf_score.py`, `models/metrics.py` |
 | 3 | GPS 핑 API · 재위탁 방지 · Shapely 이탈 3회 디바운싱 · 지연 감지 · 해시 체인 | `engines/tracking_engine.py`, `services/tracking_service.py`, `models/audit.py` |
 | 4 | 상호 리뷰(별점 · 태그) · 자동/수동 블랙리스트 | `services/review_service.py`, `models/review.py` |

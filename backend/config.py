@@ -28,10 +28,13 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"
     # ---- 엔진 기준값 ----
     ml_threshold: float = 0.75                    # LightGBM 수락 예측 보수적 임계값 (미만이면 자동 제안 안 함)
-    safety_margin: float = 0.10                   # 적재 안전율: 부피 · 중량 90% 초과 시 차단 (85% 초과 경고)
+    safety_margin: float = 0.05                   # 적재 안전율: 부피 · 중량 95% 초과 시 차단 (90% 초과 경고)
+    top_load_margin: float = 0.10                 # 상부 허용하중 안전 여유: 상자 위에는 허용하중의 90% 까지만 (신고 무게 오차 흡수)
     deviation_km: float = 1.0                     # 경로 이탈 판정 거리 (계획 경로에서 1km 이상)
     deviation_hits: int = 3                       # 연속 몇 번 벗어나야 경고할지 (디바운싱)
     delay_alert_min: int = 30                     # 계획 ETA 대비 지연 알림 기준 (분)
+    # ---- 시연 ----
+    demo_auto_deliver: bool = False               # 데모: 도착(진행률 97%)한 운행을 자동 하차 완료 → 기사가 하차지에서 다음 배차 대기
 
 
 settings = Settings()

@@ -111,4 +111,25 @@ try:
 except ApiError as e:
     check("목록 밖 상차지는 등록 거부", e.status == 400, e.detail)
 
+section("공차 거리 비교: 선택지가 없는 라운드 제외")
+from datetime import datetime as _dt  # noqa: E402
+st3 = Store()
+st3.metrics_log.clear()
+o1, o2 = {"id": "X-1"}, {"id": "X-2"}
+# 화물 1건 × 후보 1명: 어떤 방식이든 같은 기사 → 비교에서 제외
+st3._log_round(_dt.now(), [o1], {"X-1": []}, {"X-1": [{"id": "D-A", "pickup_km": 28.4}]},
+               [("X-1", "D-A", 0.8)], [("X-1", "D-A", 0.8)], 5.0)
+e = st3.metrics_log[-1]
+check("후보 1명뿐 → 선택지 없음 · 단축률 기록 안 함", e["has_choice"] is False and e["deadhead_vs_nearest_pct"] is None)
+# 화물 2건 × 기사 2명 (D-A 가 두 화물 모두의 후보) → 선택지 있음
+rk = {"X-1": [{"id": "D-A", "pickup_km": 5.0}, {"id": "D-B", "pickup_km": 9.0}],
+      "X-2": [{"id": "D-A", "pickup_km": 2.0}]}
+st3._log_round(_dt.now(), [o1, o2], {"X-1": [], "X-2": []}, rk,
+               [("X-1", "D-B", 0.7), ("X-2", "D-A", 0.9)], [("X-1", "D-A", 0.9)], 5.0)
+e = st3.metrics_log[-1]
+check("후보가 겹치는 라운드 → 선택지 있음 · 단축률 기록", e["has_choice"] is True and e["deadhead_vs_nearest_pct"] is not None,
+      f"헝가리안 {e['hungarian_avg_km']}km vs 최단거리 {e['nearest_avg_km']}km → {e['deadhead_vs_nearest_pct']}%")
+m = st3.matching_metrics()
+check("집계는 선택지 있던 라운드만", m["comparable_rounds"] == 1, f"{m['comparable_rounds']}회")
+
 finish()

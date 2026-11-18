@@ -293,7 +293,7 @@ def live_map(layer: str):
     df = df.assign(color=df["kind"].map(ui.MAP_COLORS),
                    speed_text=df["speed"].map(lambda v: f"{v} km/h" if v else "정차"),
                    temp_text=df["temp"].map(lambda t: "" if pd.isna(t) else f" · {t:+.1f}°C"))
-    hubs = pd.DataFrame([{"name": k, "lat": v[0], "lon": v[1]} for k, v in HUBS.items()])
+    hubs = pd.DataFrame(_hubs(), columns=["name", "lat", "lon"])
     # 등록 기사의 운행 경로 (상차지 → 하차지 도로 경로)
     routes = df[df["path"].notna()][["path", "kind"]].copy() if "path" in df else pd.DataFrame()
     if not routes.empty:
@@ -330,8 +330,13 @@ def live_map(layer: str):
         st.rerun()
 
 
-HUBS = {"서울/인천": (37.50, 126.80), "평택항": (36.97, 126.83), "대전 HUB": (36.35, 127.38), "대구": (35.87, 128.60),
-        "광주": (35.16, 126.85), "울산": (35.54, 129.31), "부산항": (35.10, 129.04)}
+@st.cache_data(ttl=600, show_spinner=False)
+def _hubs() -> list[dict]:
+    """물류 거점 (백엔드 spatial.HUBS 와 같은 목록 · /meta)."""
+    try:
+        return [{k: h[k] for k in ("name", "lat", "lon")} for h in api.get("/meta").get("hubs", [])]
+    except api.ApiError:
+        return []
 
 
 @st.dialog("매칭 실패 조치", width="large")
@@ -534,6 +539,7 @@ def metrics_panel(m: dict | None):
              "alert": m.get("deadhead_vs_nearest_pct") is not None
              and m["deadhead_vs_nearest_pct"] < m.get("target_deadhead_vs_nearest_pct", 10),
              "note": f"단순 최단거리 매칭 대비 · 목표 ≥ {m.get('target_deadhead_vs_nearest_pct', 10):.0f}%"
+                     + f" · 비교 라운드 {m.get('comparable_rounds', 0)}회 (후보 1명뿐인 라운드 제외)"
                      + ("" if m["empty_deadhead_km_reduction_pct"] is None
                         else f" · 점수순 그리디 대비 {m['empty_deadhead_km_reduction_pct']:.1f}%")},
             {"label": "거절률", "value": "-" if m["rejection_rate_pct"] is None else f"{m['rejection_rate_pct']:.1f}",

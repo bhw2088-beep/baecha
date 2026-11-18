@@ -1,4 +1,9 @@
-"""로그인 / 회원가입 화면."""
+"""로그인 / 회원가입 화면.
+
+- 일반 로그인(/): 화주 · 차주 전용. 관제 계정으로 로그인하면 막고 관제센터 로그인을 안내한다.
+- 관제센터 로그인(/?mode=control): 통합관제 전용 화면. 링크 없이 주소로만 들어온다. 화주 · 차주 계정은 막는다.
+- 회원가입: 화주 · 차주만. 통합관제 계정은 가입 화면에서 만들지 않는다.
+"""
 
 import streamlit as st
 
@@ -7,15 +12,37 @@ import session
 import ui
 
 ROLES = {"shipper": "화주 (기업)", "driver": "차주 (기사)", "admin": "통합관제"}
+SIGNUP_ROLES = ["shipper", "driver"]       # 통합관제 계정은 가입 화면에서 만들지 않는다
+GENERAL_ROLES = {"shipper", "driver"}       # 일반 로그인 화면에서 들어올 수 있는 계정
+CONTROL_ROLES = {"admin"}                    # 관제센터 로그인 화면에서 들어올 수 있는 계정
 DEMO_PASSWORD = "baecha1234"
 
 
-def _login(email: str, password: str):
+def is_control_login() -> bool:
+    """관제센터 전용 로그인 주소인가: http://localhost:8501/?mode=control"""
+    return st.query_params.get("mode") == "control"
+
+
+def _login(email: str, password: str, allowed: set[str]):
     try:
         res = api.post("/auth/login", {"email": email, "password": password})
     except api.ApiError as e:
         st.error(str(e), icon="⚠️")
         return
+    if res["user"]["role"] not in allowed:
+        # 다른 화면용 계정: 방금 받은 토큰은 바로 폐기하고 로그인하지 않는다
+        try:
+            api.post("/auth/logout", headers={"Authorization": f"Bearer {res['token']}"})
+        except api.ApiError:
+            pass
+        if res["user"]["role"] == "admin":
+            st.error("통합관제 계정은 관제센터 전용 로그인 화면에서 접속하세요.", icon="⚠️")
+        else:
+            st.error("관제센터는 통합관제 계정만 접속할 수 있습니다. 화주 · 차주는 일반 로그인 화면을 이용하세요.",
+                     icon="⚠️")
+        return
+    if "mode" in st.query_params:
+        del st.query_params["mode"]  # 로그인 뒤에는 주소를 첫 화면으로 정리
     st.session_state.token = res["token"]
     session.remember(res["token"])
     st.session_state.user = res["user"]
@@ -51,6 +78,9 @@ def screen():
         meta = None
         st.error(str(e), icon="⚠️")
 
+    if is_control_login():
+        _control_screen(meta)
+        return
     left, gap, right = st.columns([1.15, 0.08, 1])
     with left:
         _hero(meta)
@@ -72,12 +102,12 @@ def _login_form(meta):
             if not email or not password:
                 st.warning("이메일과 비밀번호를 입력해 주세요.")
             else:
-                _login(email, password)
+                _login(email, password, GENERAL_ROLES)
 
     st.html('<div class="ct" style="margin:18px 0 6px"><div class="ct-sec"><b>데모 계정으로 바로 체험</b>'
             '<span>[접속]을 누르면 바로 로그인</span></div></div>')
-    demos = (meta or {}).get("demo_accounts", [])
-    cols = st.columns(3)
+    demos = [a for a in (meta or {}).get("demo_accounts", []) if a["role"] in GENERAL_ROLES]
+    cols = st.columns(len(demos) or 1)
     for col, acc in zip(cols, demos):
         with col:
             with st.container(border=True):
@@ -88,7 +118,7 @@ def _login_form(meta):
                         f'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical" title="{acc["sub"]}">'
                         f'{acc["sub"]}</div></div>')
                 if st.button("접속", key=f"demo_{acc['role']}", width="stretch"):
-                    _login(acc["email"], DEMO_PASSWORD)
+                    _login(acc["email"], DEMO_PASSWORD, GENERAL_ROLES)
 
     st.write("")
     c1, c2 = st.columns([2, 1])
@@ -98,11 +128,66 @@ def _login_form(meta):
         st.rerun()
 
 
+def _control_screen(meta):
+    """관제센터 전용 로그인 (통합관제 계정만)."""
+    s = (meta or {}).get("stats", {})
+    left, gap, right = st.columns([1.15, 0.08, 1])
+    with left:
+        st.html(f"""
+        <div class="ct"><div class="ct-hero" style="background:linear-gradient(160deg,#0B1020 0%,#111A33 60%,#1E2A52 100%)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            {ui.LOGO}
+            <div class="ct-live"><i></i>Control center</div>
+          </div>
+          <div>
+            <h1>통합관제<br><em>센터 접속</em></h1>
+            <p>전국 운행 · 자동 매칭 · 이상 감지 · 컴플라이언스를 한 화면에서 관제합니다.
+               관제센터에서 발급한 통합관제 계정만 접속할 수 있습니다.</p>
+          </div>
+          <div class="stats">
+            <div><b>{s.get("vehicles", "-")}</b><span>네트워크 차량</span></div>
+            <div><b>{s.get("moving", "-")}</b><span>지금 이동 중</span></div>
+            <div><b>{s.get("orders_today", "-")}</b><span>오늘 등록 화물</span></div>
+          </div>
+        </div></div>""")
+    with right:
+        st.html('<div class="ct" style="margin-top:24px"><div class="ct-eyebrow">Control center</div>'
+                '<div class="ct-title">관제센터 로그인</div>'
+                '<div class="ct-desc">통합관제 계정으로 접속하세요. 화주 · 차주 계정은 접속할 수 없습니다.</div></div>')
+        with st.form("control_login", border=False):
+            email = st.text_input("관제 계정 이메일", placeholder="name@control.co.kr")
+            password = st.text_input("비밀번호", type="password")
+            if st.form_submit_button("관제센터 접속", type="primary", width="stretch",
+                                     icon=":material/admin_panel_settings:"):
+                if not email or not password:
+                    st.warning("이메일과 비밀번호를 입력해 주세요.")
+                else:
+                    _login(email, password, CONTROL_ROLES)
+
+        demos = [a for a in (meta or {}).get("demo_accounts", []) if a["role"] in CONTROL_ROLES]
+        if demos:
+            st.html('<div class="ct" style="margin:18px 0 6px"><div class="ct-sec"><b>데모 관제 계정</b>'
+                    '<span>[접속]을 누르면 바로 로그인</span></div></div>')
+            acc = demos[0]
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1], vertical_alignment="center")
+                c1.html(f'<div class="ct">{ui.pill(ROLES["admin"], "brand")}'
+                        f'<div class="ct-strong" style="margin-top:8px">{acc["name"]}</div>'
+                        f'<div class="ct-muted" style="font-size:12px">{acc["sub"]}</div></div>')
+                if c2.button("접속", key="demo_admin", width="stretch"):
+                    _login(acc["email"], DEMO_PASSWORD, CONTROL_ROLES)
+
+        st.caption("통합관제 계정은 관제센터에서 발급합니다 (회원가입으로 만들 수 없음).")
+        if st.button("← 화주 · 차주 로그인"):
+            del st.query_params["mode"]
+            st.rerun()
+
+
 def _register_form(meta):
     st.html('<div class="ct" style="margin-top:8px"><div class="ct-eyebrow">Get started</div>'
             '<div class="ct-title">파트너 계정 만들기</div>'
             '<div class="ct-desc">가입 유형에 따라 필요한 정보가 달라집니다.</div></div>')
-    role = st.segmented_control("가입 유형", options=list(ROLES), format_func=ROLES.get, default="shipper",
+    role = st.segmented_control("가입 유형", options=SIGNUP_ROLES, format_func=ROLES.get, default="shipper",
                                 key="reg_role") or "shipper"
     truck_types = (meta or {}).get("truck_types", ["11톤 냉동탑차"])
 
@@ -116,11 +201,11 @@ def _register_form(meta):
         extra = {}
         files = {}
         if role == "shipper":
-            extra["company"] = c2.text_input("기업 / 화주명")
+            extra["company"] = c2.text_input("기업 / 화주명", help="사업자등록증의 상호 그대로")
             extra["biz_no"] = c1.text_input("사업자등록번호", placeholder="000-00-00000",
-                                            help="Mod-10 검증 숫자로 확인합니다. 국세청 키가 있으면 계속사업자 여부도 조회")
-            extra["owner_name"] = c2.text_input("대표자명 (선택)", help="국세청 진위확인에 사용")
-            extra["open_date"] = c1.text_input("개업일자 (선택)", placeholder="YYYYMMDD", help="국세청 진위확인에 사용")
+                                            help="기업명 · 대표자명 · 개업일자와 함께 사업자 진위확인 (4개 모두 일치해야 가입)")
+            extra["owner_name"] = c2.text_input("대표자명", help="사업자등록증의 대표자 성명")
+            extra["open_date"] = c1.text_input("개업일자", placeholder="YYYYMMDD", help="사업자등록증의 개업연월일")
         elif role == "driver":
             extra["biz_no"] = c2.text_input("차주 사업자등록번호", placeholder="000-00-00000")
             extra["plate"] = c1.text_input("차량 번호", placeholder="경기 00바 0000",
@@ -135,12 +220,16 @@ def _register_form(meta):
             files["license_photo"] = f1.file_uploader("운전면허증 / 신분증", type=["png", "jpg", "jpeg"])
             files["cargo_license_photo"] = f2.file_uploader("화물운송종사 자격증", type=["png", "jpg", "jpeg"])
             files["vehicle_photo"] = f3.file_uploader("차량등록증 / 번호판", type=["png", "jpg", "jpeg"])
-        else:
-            extra["approval_code"] = c2.text_input("관제센터 승인 코드", type="password",
-                                                   help="관제센터 관리자에게 발급받은 보안 인증키")
-        if role in ("shipper", "driver"):
-            st.caption("시연용 사업자번호 — 통과: 124-81-00998 · 211-81-36000 / 실패: 123-45-67890(검증 숫자 오류) · "
-                       "101-81-45901(휴업) · 220-81-62517(폐업)")
+        if role in SIGNUP_ROLES:
+            # 차주는 사업자번호 · 차량 번호 · 연락처가 기존 가입자와 겹치면 안 된다 (화주는 같은 회사 번호 허용)
+            if role == "shipper":
+                st.caption("시연용 사업자 (기업명 · 사업자번호 · 대표자명 · 개업일자 4개가 모두 맞아야 가입) — "
+                           "통과: 배차테스트물류 · 105-87-12345 · 홍길동 · 20200115 / "
+                           "삼성물류 · 124-81-00998 · 김삼성 · 19960101 (같은 회사 담당자 추가) · "
+                           "실패: 위 정보 중 하나라도 다르면 · 123-45-67890(검증 숫자 오류) · 101-81-45901(휴업)")
+            else:
+                st.caption("시연용 사업자번호 — 통과: 220-88-45671 · 314-26-78902 / 실패: 123-45-67890(검증 숫자 오류) · "
+                           "101-81-45901(휴업) · 220-81-62517(폐업) · 이미 가입된 연락처 · 차량 번호 · 사업자번호는 가입 불가")
         agree = st.checkbox("[필수] 이용약관 · 개인정보 처리방침에 동의합니다.")
         gps = st.checkbox("[필수] 위치정보 수집 · 이용에 동의합니다 (운행 중 GPS · 관제 목적)") if role == "driver" else True
         submitted = st.form_submit_button("가입하고 시작하기", type="primary", width="stretch")

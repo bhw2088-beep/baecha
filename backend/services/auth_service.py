@@ -67,13 +67,20 @@ class AuthMixin:
             raise ApiError(400, "비밀번호는 8자 이상이어야 합니다.")
         # 가입 자동 검증(컴플라이언스 규칙): 통과 · 차단 모두 감사 로그에 남겨 KPI '검증 자동화율'로 집계한다
         try:
+            if role in ("shipper", "driver"):
+                self._check_duplicates(role, phone, biz_no, plate)
             if role == "shipper":
-                if not company or not biz_no:
-                    raise ApiError(400, "기업명과 사업자등록번호를 입력해 주세요.")
-                biz = self._check_business(biz_no, owner_name, open_date)
+                # 기업명 · 사업자번호 · 대표자명 · 개업일자 4개 모두 필수, 하나의 사업자 등록 정보와 모두 일치해야 가입
+                if not all((v or "").strip() for v in (company, biz_no, owner_name, open_date)):
+                    raise ApiError(400, "기업명 · 사업자등록번호 · 대표자명 · 개업일자를 모두 입력해 주세요.")
+                biz = comp.verify_business_identity(biz_no, company, owner_name, open_date,
+                                                    api_key=settings.nts_api_key)
+                if not biz["ok"]:
+                    raise ApiError(400, f"사업자 진위확인 실패: {biz['label']}"
+                                        + (f" ({biz['note']})" if biz.get("note") else "") + f" · {biz['source_label']}")
                 org_id = f"S-{len(self.shippers) + 1:03d}"
-                self.shippers[org_id] = {"id": org_id, "name": company, "biz_no": biz["biz_no"], "biz_check": biz,
-                                         "owner_name": owner_name or None}
+                self.shippers[org_id] = {"id": org_id, "name": company.strip(), "biz_no": biz["biz_no"], "biz_check": biz,
+                                         "owner_name": owner_name.strip(), "open_date": open_date}
                 sub = company
             elif role == "driver":
                 if not plate or not truck_type or not biz_no:
@@ -118,6 +125,39 @@ class AuthMixin:
         self._create_user(email=email, role=role, name=name, password=password, phone=phone,
                           org_id=org_id, sub=sub, documents=documents or [])
         return self.login(email, password)
+
+    @staticmethod
+    def _digits(value: str | None) -> str:
+        return "".join(c for c in (value or "") if c.isdigit())
+
+    @staticmethod
+    def _plate_key(value: str | None) -> str:
+        return "".join((value or "").split())  # '경기 88바 7712' = '경기88바7712'
+
+    def _check_duplicates(self, role: str, phone: str | None, biz_no: str | None, plate: str | None):
+        """가입 중복 방지 (이메일 중복은 위에서 따로 확인).
+        - 연락처: 화주 · 차주 · 관제 전체에서 한 번만 (숫자만 비교: 010-1234-5678 = 01012345678)
+        - 사업자번호: 차주는 1인 1번호(다른 차주 · 화주와 겹치면 안 됨),
+                      화주는 같은 회사 담당자 여러 명 허용 · 단 차주로 등록된 번호는 사용 불가
+        - 차량 번호: 차주 전체에서 한 대 한 명 (띄어쓰기 무시)"""
+        p = self._digits(phone)
+        if p:
+            used = {self._digits(u.get("phone")) for u in self.users.values()}
+            used |= {self._digits(d.get("phone")) for d in self.drivers.values()}
+            if p in used:
+                raise ApiError(409, "이미 가입된 연락처입니다.")
+        b = self._digits(biz_no)
+        if b:
+            driver_biz = {self._digits(d.get("biz_no") or (d.get("approval") or {}).get("biz_no"))
+                          for d in self.drivers.values()} - {""}
+            shipper_biz = {self._digits(s.get("biz_no")) for s in self.shippers.values()} - {""}
+            if role == "driver" and b in driver_biz | shipper_biz:
+                raise ApiError(409, "이미 등록된 사업자등록번호입니다.")
+            if role == "shipper" and b in driver_biz:
+                raise ApiError(409, "차주로 등록된 사업자등록번호라 화주 가입에 사용할 수 없습니다.")
+        if role == "driver" and plate:
+            if self._plate_key(plate) in {self._plate_key(d.get("plate")) for d in self.drivers.values()}:
+                raise ApiError(409, "이미 등록된 차량 번호입니다.")
 
     def _signup_audit(self, role: str, passed: bool, detail: str):
         from ..engines.fsm.order_fsm import audit_entry

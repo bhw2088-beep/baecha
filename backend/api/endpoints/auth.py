@@ -32,6 +32,7 @@ async def meta():
             for u in store.users.values() if u["email"] in {d["email"] for d in seed.USERS}
         ][:3],
         "stats": store.public_stats(),
+        "hubs": [{"name": k, "lat": v[0], "lon": v[1], "weight": geo.HUB_WEIGHTS.get(k)} for k, v in geo.HUBS.items()],
     }
 
 
@@ -53,8 +54,8 @@ async def register(
     truck_type: str | None = Form(None),
     base_location: str | None = Form(None),
     approval_code: str | None = Form(None),
-    owner_name: str | None = Form(None),      # 대표자명 (국세청 진위확인용 · 선택)
-    open_date: str | None = Form(None),       # 개업일자 YYYYMMDD (국세청 진위확인용 · 선택)
+    owner_name: str | None = Form(None),      # 대표자명 (화주 필수 · 진위확인 / 차주 선택)
+    open_date: str | None = Form(None),       # 개업일자 YYYYMMDD (화주 필수 · 진위확인 / 차주 선택)
     license_photo: UploadFile | None = File(None),
     cargo_license_photo: UploadFile | None = File(None),   # 화물운송종사 자격증
     vehicle_photo: UploadFile | None = File(None),

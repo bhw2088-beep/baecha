@@ -4,7 +4,7 @@
 - 모의 기상: 확률 분포(맑음 · 비 · 폭설), 같은 권역 · 시간대 재현성, 할증 배율 비 15% · 폭설 30%
 - 수급 D/S: 러시아워 포아송 수요 폭증, 1.5 초과 시 서지 발동 · 상한 30%
 - 운임 산정: 날씨 · 서지 요인이 기본 운임 × 배율로 결합
-- 적재 안전율(85% 경고 · 90% 차단) · 축중량 균형(경량 화물 완화) · 필수 최소 톤수
+- 적재 안전율(90% 경고 · 95% 차단) · 축중량 균형(경량 화물 완화) · 필수 최소 톤수
 - 매칭 점수: cf_score 범위 · 모의 스코어러 0~1 · 임계값 0.75
 """
 
@@ -55,9 +55,9 @@ calm = dict(mk, ds_ratio=1.0, surge=0.0, surge_on=False, weather={**mk["weather"
 check("평상시보다 비쌈", e["recommended"] > pricing.estimate("11톤 탑차", "경기 평택시", "부산항", market=calm)["recommended"])
 
 section("적재 안전율 · 축중량 · 필수 톤수")
-check("80% → 통과", ve.safety_check(0.80, 0.5)["status"] == "pass")
-check("87% → 경고 (공간 부족 위험)", ve.safety_check(0.87, 0.5)["status"] == "warn")
-check("92% → 차단 (안전율 10%)", ve.safety_check(0.5, 0.92)["status"] == "fail")
+check("88% → 통과", ve.safety_check(0.88, 0.5)["status"] == "pass")
+check("92% → 경고 (공간 부족 위험)", ve.safety_check(0.92, 0.5)["status"] == "warn")
+check("97% → 차단 (안전율 5%)", ve.safety_check(0.5, 0.97)["status"] == "fail")
 rows = [dict(x=0, y=0, z=0, length=1000, width=1000, height=1000, weight_kg=4000)]
 check("앞쪽 · 한쪽에 몰린 무거운 화물 → 차단", ve.axle_balance(rows, 6000, 2400, 5000)["status"] == "fail")
 light = [dict(x=0, y=0, z=0, length=1000, width=1000, height=1000, weight_kg=300)]
@@ -65,8 +65,8 @@ check("같은 위치라도 가벼우면 경고로 완화", ve.axle_balance(light
 mid = [dict(x=2500, y=700, z=0, length=1000, width=1000, height=1000, weight_kg=4000)]
 ab = ve.axle_balance(mid, 6000, 2400, 5000)
 check("가운데 화물 → 통과 · 앞축+뒤축 = 총중량", ab["status"] == "pass" and abs(ab["front_kg"] + ab["rear_kg"] - 4000) < 1)
-check("필수 최소 톤수: 900kg → 1톤 차량은 안전율 한도(900kg) 안", ve.required_tonnage(900, 1e9, list(TRUCKS.values())) == 1.0)
-check("필수 최소 톤수: 950kg → 2.5톤", ve.required_tonnage(950, 1e9, list(TRUCKS.values())) == 2.5)
+check("필수 최소 톤수: 950kg → 1톤 차량은 안전율 5% 한도(950kg) 안", ve.required_tonnage(950, 1e9, list(TRUCKS.values())) == 1.0)
+check("필수 최소 톤수: 960kg → 2.5톤", ve.required_tonnage(960, 1e9, list(TRUCKS.values())) == 2.5)
 check("냉장 화물은 냉장 차량 중에서", ve.required_tonnage(900, 1e9, list(TRUCKS.values()), cold_chain=True) == 5.0)
 
 section("매칭 점수 피처 · 임계값")

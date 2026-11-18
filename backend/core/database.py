@@ -501,8 +501,10 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, Tra
         regions = ["서울", "경기", "인천", "충남", "충북", "경북", "경남", "부산", "대구", "전남"]
         letters = "가나다라마바사아자차카타파하"
         fleet = []
+        # 간선 축은 양 끝 거점의 화물 비중만큼 자주 고른다 (수도권 · 평택 축에 차량이 몰림)
+        weights = [geo.HUB_WEIGHTS[a] + geo.HUB_WEIGHTS[b] for a, b in geo.CORRIDORS]
         for i in range(30):
-            a, b = rng.choice(geo.CORRIDORS)
+            a, b = rng.choices(geo.CORRIDORS, weights=weights)[0]
             kind = rng.choices(["transit", "cold", "empty"], weights=[55, 20, 25])[0]
             truck = rng.choice(["11톤 냉동탑차", "5톤 냉동탑차"]) if kind == "cold" else \
                 rng.choice(["1톤 카고", "5톤 윙바디", "11톤 탑차", "11톤 탑차", "25톤 무진동"])
@@ -512,7 +514,8 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, Tra
                 "a": geo.HUBS[a], "b": geo.HUBS[b], "seg_km": max(geo.route_km(geo.HUBS[a], geo.HUBS[b]), 1.0),
                 "path": geo.route(geo.HUBS[a], geo.HUBS[b]),  # 도로를 따라 거점 사이를 오간다
                 "phase": rng.random() * 2, "speed": rng.randint(68, 92), "kind": kind, "truck_type": truck,
-                "jitter": (rng.uniform(-0.05, 0.05), rng.uniform(-0.05, 0.05)),
+                # 공차는 거점 주변에 모여 대기 (가우스 σ≈0.015° ≈ 1.7km)
+                "jitter": (rng.gauss(0, 0.015), rng.gauss(0, 0.015)),
             })
         return fleet
 

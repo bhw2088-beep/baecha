@@ -23,7 +23,7 @@ def _safety_margin() -> float:
         from ...config import settings
         return settings.safety_margin
     except Exception:  # noqa: BLE001 — 엔진 단독 실행
-        return 0.10
+        return 0.05
 
 
 def _run(container, boxes, options: Options, cold_chain: bool) -> dict:
@@ -43,6 +43,14 @@ def _score(r: dict) -> tuple:
     return (_ok(r), r["metrics"]["placed"], -fails, -lateral)
 
 
+def _top_load_margin() -> float:
+    try:
+        from ...config import settings
+        return settings.top_load_margin
+    except Exception:  # noqa: BLE001 — 엔진 단독 실행
+        return 0.10
+
+
 def _run_once(container, boxes, options: Options, cold_chain: bool) -> dict:
     res = EPPacker(container, options).pack(boxes)
     rows = [p.to_dict() for p in res["placements"]]
@@ -54,7 +62,8 @@ def _run_once(container, boxes, options: Options, cold_chain: bool) -> dict:
         "steps": res["steps"],
         "metrics": {**summarize(container, rows, len(boxes), total_w), "elapsed_ms": res["elapsed_ms"]},
         "constraints": validate(container, rows, min_support=options.min_support, lifo=options.lifo,
-                                cold_chain=cold_chain, safety_margin=_safety_margin()),
+                                cold_chain=cold_chain, safety_margin=_safety_margin(),
+                                top_load_margin=options.top_load_margin),
         "balance_used": options.balance,
     }
 
@@ -65,7 +74,8 @@ def _ok(r: dict) -> bool:
 
 
 def plan(items: list[ItemSpec], *, truck_type: str | None, cold_chain: bool, options: Options) -> dict:
-    options = replace(options, safety_margin=_safety_margin())  # R9: 엔진도 안전율 한도까지만 싣는다
+    # R9: 엔진도 안전율 한도까지만 싣는다 · R6: 상부 허용하중은 여유를 두고 (기본 90% 까지)
+    options = replace(options, safety_margin=_safety_margin(), top_load_margin=_top_load_margin())
     boxes = expand(items)
     if not boxes:
         raise PackingError("적재할 품목을 1개 이상 입력해 주세요.")

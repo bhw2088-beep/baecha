@@ -37,6 +37,7 @@ x-app: &app
 # 컨테이너끼리는 서비스 이름(db, redis)으로 접속 (.env 의 localhost 주소를 덮어씀)
 x-app-env: &app-env
   TZ: Asia/Seoul
+  DEMO_AUTO_DELIVER: ${DEMO_AUTO_DELIVER:-0}   # 운영: 자동 하차 완료 끔 (기사가 인수증 사진과 함께 직접 완료)
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
   REDIS_URL: redis://redis:6379/0
 
@@ -174,6 +175,7 @@ services:
       SIM_API_KEY: ${SIM_API_KEY}
       TIME_SCALE: ${TIME_SCALE:-20}
       SIM_DEVIATION_EVERY: ${SIM_DEVIATION_EVERY:-240}
+      SIM_SPIKE_EVERY: ${SIM_SPIKE_EVERY:-90}
     networks: [edge]
     deploy:
       resources:
