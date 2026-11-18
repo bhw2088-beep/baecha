@@ -1,7 +1,7 @@
 """
 Phase 5: Google Gemini 기반 능동형 AI 관제 (Function Calling)  — 키가 없으면 규칙 기반 에이전트로 대신
 
-  모델  : settings.gemini_model (기본 gemini-3.8-flash) · temperature 0.2 · flash 모델은 생각(thinking) 단계를 꺼서 빠르게
+  모델  : settings.gemini_model (기본 gemini-3.5-flash-lite) · temperature 0.2 · flash 모델은 생각(thinking) 단계를 꺼서 빠르게
   도구  : 관제 데이터를 읽는 함수 + 매칭 설정을 바꾸는 함수 1개 (관리자가 명시적으로 요청했을 때만)
           → Gemini 가 필요한 함수를 골라 호출하고, 결과를 근거로 한국어로 답한다 (SDK 자동 함수 호출).
   안전  : 설정 변경은 함수 안에서 바로 적용하지 않고 '적용 대기'로 모았다가, 응답이 끝난 뒤 서버가 범위를
@@ -14,6 +14,7 @@ engines/ai/rule_agent.py 의 handle_command / incident_report 결과를 그대�
 from __future__ import annotations
 
 import json
+import time
 
 from . import rule_agent
 
@@ -133,7 +134,6 @@ def _generate(settings, prompt, tools, system: str = SYSTEM, max_calls: int | No
         if code == 400 and think is not None:      # 이 모델이 생각 끄기를 거부 → 기본 설정으로 한 번 더
             resp = run(None)
         elif code in (500, 503):                   # 구글 서버 일시 과부하 → 1초 뒤 한 번 더
-            import time
             time.sleep(1)
             resp = run(think)
         else:
@@ -147,10 +147,26 @@ def _fail_reason(e: Exception) -> str:
     if code == 429 or "RESOURCE_EXHAUSTED" in str(e):
         return "429 무료 할당량 초과"
     if code == 404:
-        return "404 모델 없음 → .env 의 GEMINI_MODEL 확인 (예: gemini-3.8-flash)"
+        return "404 모델 없음 → .env 의 GEMINI_MODEL 확인 (예: gemini-3.5-flash-lite)"
     if code in (400, 401, 403) and "API key" in str(e):
         return f"{code} API 키 오류 → .env 의 GEMINI_API_KEY 확인"
     return f"{code} {status}" if code else type(e).__name__
+
+
+_QUOTA_BLOCK: dict[str, float] = {}   # 모델 → 하루 한도가 풀리는 시각(epoch). 그 전엔 Gemini 를 부르지 않음
+
+
+def _quota_info(e: Exception) -> tuple[bool, float | None]:
+    """429 오류 → (하루 한도인가, 다시 시도까지 초). 무료 티어 한도는 '분당'과 '하루' 두 가지."""
+    import re
+    text = str(e)
+    per_day = "PerDay" in text
+    m = re.search(r"retryDelay['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)s", text)
+    return per_day, float(m.group(1)) if m else None
+
+
+def _hours(sec: float) -> str:
+    return f"{int(sec // 3600)}시간 {int(sec % 3600 // 60)}분" if sec >= 3600 else f"{max(1, int(sec // 60))}분"
 
 
 def _readonly_tools(store, used: list[str]):
@@ -184,6 +200,10 @@ def control_tower(store, settings, command: str, history: list[dict] | None = No
     Gemini 키가 없거나 호출이 실패하면(할당량 초과 포함) 규칙 기반 답으로 대신한다."""
     if not available(settings):
         return {**rule_agent.answer_readonly(store, command), "tools": [], "fallback": "GEMINI_API_KEY 없음 → 규칙 기반"}
+    blocked = _QUOTA_BLOCK.get(settings.gemini_model, 0) - time.time()
+    if blocked > 0:                             # 하루 무료 한도 소진 → 초기화까지 Gemini 를 부르지 않고 규칙 기반으로
+        return {**rule_agent.answer_readonly(store, command), "tools": [],
+                "fallback": f"오늘 Gemini 무료 한도 소진 · 약 {_hours(blocked)} 뒤 초기화 → 규칙 기반", "quota": True}
     contents = [{"role": "model" if h.get("role") == "assistant" else "user", "parts": [{"text": str(h.get("text", ""))[:2000]}]}
                 for h in (history or [])[-6:] if h.get("text")]
     contents.append({"role": "user", "parts": [{"text": command}]})
@@ -193,8 +213,13 @@ def control_tower(store, settings, command: str, history: list[dict] | None = No
                            max_calls=MAX_TOOL_CALLS)
     except Exception as e:  # noqa: BLE001
         reason = _fail_reason(e)
-        if reason.startswith("429"):            # 분당 한도: 엉뚱한 요약 대신 '잠시 뒤 다시'를 분명히
-            return {"engine": f"Gemini {settings.gemini_model}", "answer": QUOTA_MSG, "tools": used,
+        if reason.startswith("429"):
+            per_day, wait = _quota_info(e)
+            if per_day:                         # 하루 한도: 기다리라고만 하지 말고 규칙 기반으로 바로 답 + 초기화까지 호출 멈춤
+                _QUOTA_BLOCK[settings.gemini_model] = time.time() + (wait or 3600)
+                return {**rule_agent.answer_readonly(store, command), "tools": used,
+                        "fallback": f"오늘 Gemini 무료 한도 소진 · 약 {_hours(wait or 3600)} 뒤 초기화 → 규칙 기반", "quota": True}
+            return {"engine": f"Gemini {settings.gemini_model}", "answer": QUOTA_MSG, "tools": used,   # 분당 한도
                     "fallback": "429 무료 할당량(분당) 초과", "quota": True}
         return {**rule_agent.answer_readonly(store, command), "tools": [],      # 키 오류 · 모델 없음 · 네트워크 → 규칙 기반
                 "fallback": f"Gemini 호출 실패 ({reason}) → 규칙 기반"}

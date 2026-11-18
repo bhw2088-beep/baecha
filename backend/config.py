@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # ---- 외부 연동 (없으면 모의 · 규칙 기반으로 동작) ----
     nts_api_key: str = ""                         # 국세청 사업자 진위확인 (data.go.kr 인증키 Decoding)
     gemini_api_key: str = ""                      # Google Gemini (AI 관제 자연어 명령)
-    gemini_model: str = "gemini-3.8-flash"      # 2.5-flash 는 신규 키에서 404 (2026-11 확인)
+    gemini_model: str = "gemini-3.5-flash-lite"  # 가벼운 모델 (무료 한도는 모델마다 따로) · 2.5-flash 는 신규 키에서 404
     # ---- 엔진 기준값 ----
     ml_threshold: float = 0.75                    # LightGBM 수락 예측 보수적 임계값 (미만이면 자동 제안 안 함)
     safety_margin: float = 0.05                   # 적재 안전율: 부피 · 중량 95% 초과 시 차단 (90% 초과 경고)
