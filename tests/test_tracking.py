@@ -140,13 +140,15 @@ section("데모 자동 하차 완료 (DEMO_AUTO_DELIVER)")
 st2 = Store()
 run = next(o for o in st2.orders.values() if o["status"] == "IN_TRANSIT" and not st2._open_anomaly(o["id"], "STAGNATION"))
 run["progress"] = 98.0
-st2.tick()
-check("스위치 꺼짐 → 자동 완료 안 함", run["status"] == "IN_TRANSIT")
-settings.demo_auto_deliver = True
+_auto_before = settings.demo_auto_deliver   # .env 에 DEMO_AUTO_DELIVER=1 이 있어도 결과가 같게 직접 켜고 끈다
 try:
+    settings.demo_auto_deliver = False
+    st2.tick()
+    check("스위치 꺼짐 → 자동 완료 안 함", run["status"] == "IN_TRANSIT")
+    settings.demo_auto_deliver = True
     st2.tick()
 finally:
-    settings.demo_auto_deliver = False
+    settings.demo_auto_deliver = _auto_before
 drv = st2.drivers[run["driver_id"]]
 check("도착(97% 이상) → 자동 하차 완료 · 인수증", run["status"] == "DELIVERED" and run["pod"]["photo"].get("auto"),
       run["pod"]["hash"])

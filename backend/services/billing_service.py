@@ -169,10 +169,12 @@ PLATFORM_FEE_RATE = 0.03   # 플랫폼 수수료 (모의) — 기사 송금액 =
 class BillingMixin:
     """차주 → 화주 청구 · 화주 결제 승인(모의 PG) · 결제 취소/환불 · 월별 인보이스 (Store 에 섞어 쓰는 Mixin)."""
 
-    def market_status(self, region: str) -> dict:
-        """권역 수급 지수: 실제 매칭 대기 화물(수요) · 빈 기사(공급) + 포아송 가상 콜 · 기본 공차."""
+    def market_status(self, region: str, exclude_id: str | None = None) -> dict:
+        """권역 수급 지수: 실제 매칭 대기 화물(수요) · 빈 기사(공급) + 포아송 가상 콜 · 기본 공차.
+        exclude_id: 수요에서 뺄 화물 (등록 중인 화물 자신 — 화주가 본 예상 운임과 같은 기준으로 계산)."""
         demand = sum(1 for o in self.orders.values()
-                     if o["status"] == "MATCHING" and market_engine.region_of(o["origin"]) == region)
+                     if o["status"] == "MATCHING" and o["id"] != exclude_id
+                     and market_engine.region_of(o["origin"]) == region)
         supply = sum(1 for d in self.drivers.values()
                      if market_engine.region_of(d["location"]) == region and self.driver_dispatchable(d)
                      and not self._active_run_of(d["id"]))
@@ -190,7 +192,7 @@ class BillingMixin:
             items = (o["packing"] or {}).get("items") or []
             e = estimate(o["truck_type"], o["origin"], o["destination"], cold_chain=o["cold_chain"],
                          urgent=o["urgent"], weight_kg=w,
-                         market=self.market_status(market_engine.region_of(o["origin"])),
+                         market=self.market_status(market_engine.region_of(o["origin"]), exclude_id=o["id"]),
                          max_item_mm=max((i["length"] for i in items), default=None),
                          pickup_at=o.get("pickup_at"))
             est = o["fare_est"] = {k: e[k] for k in ("recommended", "band", "base", "distance_km", "per_km",
