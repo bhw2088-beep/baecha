@@ -29,8 +29,22 @@ docker compose up --build -d    # db · redis · backend · worker · simulator 
 
 데모 계정 (비밀번호 `baecha1234`): 화주 `logistics@samsung.com` · 차주 `driver.kim@baecha.co.kr` · 관제 `admin.control@baecha.co.kr`
 관제 계정은 **관제센터 전용 로그인** http://localhost:8501/?mode=control 에서만 접속합니다 (일반 로그인 화면 · 회원가입에는 관제 메뉴 없음).
-VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/실행방법.md](docs/실행방법.md)** 를 보세요.
-적재 · 매칭 · 관제 핵심 코드와 측정값은 **[docs/주요코드_설명.md](docs/주요코드_설명.md)** 에 정리했습니다.
+VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/가이드/실행방법.md](docs/가이드/실행방법.md)** 를 보세요.
+적재 · 매칭 · 관제 핵심 코드와 측정값은 **[docs/설명/주요코드_설명.md](docs/설명/주요코드_설명.md)** 에 정리했습니다.
+
+---
+
+## 문서
+
+| 분류 | 문서 | 내용 |
+|---|---|---|
+| 가이드 | [실행방법.md](docs/가이드/실행방법.md) | VS Code + Docker 단계별 실행 · 문제 해결 |
+| 가이드 | [브랜치_전략.md](docs/가이드/브랜치_전략.md) | 브랜치 · PR · CI · 배포 순서 |
+| 명세 | [기능명세서.md](docs/명세/기능명세서.md) | 규칙 · 화면 · API 기능 명세 |
+| 명세 | [컬럼명_리스트.md](docs/명세/컬럼명_리스트.md) | DB 테이블 · API 응답 필드 |
+| 설명 | [주요코드_설명.md](docs/설명/주요코드_설명.md) | 적재 · 매칭 · 관제 핵심 코드 |
+| 설명 | [벤치마킹_보고서.md](docs/설명/벤치마킹_보고서.md) | 아키텍처 · KPI 측정값 · 한계 |
+| 테스트 결과 | [stress_8k/README.md](stress_8k/README.md) | 8,008건 스트레스 테스트 실행 · 결과 |
 
 ---
 
@@ -64,7 +78,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 청구  UNBILLED → REQUESTED → PAID → REFUNDED → (재청구) REQUESTED
 ```
 
-### 명세 Phase 0~8 대응 (4차 · 자세한 비교는 [docs/명세_비교_정리.md](docs/명세_비교_정리.md))
+### 명세 Phase 0~8 대응 (4차)
 | Phase | 내용 | 주요 파일 |
 |---|---|---|
 | 0 | 사업자 Mod-10 · 국세청 API(선택) · 노란 번호판 · 필수 서류 3종 · prod compose | `engines/compliance_engine.py`, `docker-compose.prod.yml` |
@@ -74,7 +88,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 | 4 | 상호 리뷰(별점 · 태그) · 자동/수동 블랙리스트 | `services/review_service.py`, `models/review.py` |
 | 5 | Gemini Function Calling 관제 (키 없으면 규칙) · 인시던트 리포트 · 조절 가이드 | `engines/ai/gemini_agent.py`, `engines/ai/rule_agent.py` |
 | 6 | 마이크로 배치 스트레스 · GPS 오탐 검증 | `tests/stress_test.py` |
-| 8 | 벤치마킹 보고서 · 법적 준비 초안 | `docs/벤치마킹_보고서.md`, `docs/법적_준비_초안.md` |
+| 8 | 벤치마킹 보고서 | `docs/설명/벤치마킹_보고서.md` |
 
 ---
 
@@ -111,7 +125,10 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 │   └── static/style.css       # 전역 스타일
 ├── mobile_web/                # index.html · js/load_visualizer.js · css/mobile_style.css (Three.js r147 CDN)
 ├── simulator/                 # virtual_driver.py(GPS) · virtual_shipper.py(가상 주문 · 부하 테스트)
-├── docs/                      # 주요코드_설명 · 실행방법 · 기능명세서 · 컬럼명_리스트 · 명세_비교_정리 · 벤치마킹_보고서 · 법적_준비_초안 · 브랜치_전략
+├── docs/
+│   ├── 가이드/                 # 실행방법 · 브랜치_전략
+│   ├── 명세/                   # 기능명세서 · 컬럼명_리스트
+│   ├── 설명/                   # 주요코드_설명 · 벤치마킹_보고서 · benchmark_metrics.json
 │   └── internal/              # 발표자료 · 변경점 정리 (git 제외 · 내부용)
 └── tests/                     # test_suites.py(pytest) · test_packing · test_matching · test_fsm · test_compliance ·
                                # test_pricing · test_tracking · stress_test · smoke_test
@@ -139,7 +156,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 
 ## 브랜치 전략
 `main`(운영) ← `staging`(통합 검증 · 시연) ← `feature/*` · `fix/*` (Pull Request + CI 통과 후 머지), 긴급은 `hotfix/*`.
-CI 는 `main` · `staging` push 와 모든 PR 에서 실행. 자세한 규칙 · 배포 순서는 **docs/브랜치_전략.md**.
+CI 는 `main` · `staging` push 와 모든 PR 에서 실행. 자세한 규칙 · 배포 순서는 **[docs/가이드/브랜치_전략.md](docs/가이드/브랜치_전략.md)**.
 
 ## 테스트
 

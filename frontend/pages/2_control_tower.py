@@ -463,20 +463,20 @@ def anomalies():
     if not rows:
         st.info("조건에 맞는 이상 감지 로그가 없습니다.")
         return
+    # 화면 폭(약 960px) 안에 들어가게: 로그 ID 는 행을 고르면 아래 상세 카드에 · 심각도 · 상태는 한글
     df = pd.DataFrame([{
-        "로그 ID": r["id"], "시각": ui.dt_text(r["at"], "%m.%d %H:%M"), "차량": f"{r['plate']} · {r['driver']}",
-        "유형": r["type_label"], "내용": r["text"], "위치": r["location"], "심각도": r["severity"],
-        "상태": "미해결" if r["status"] == "UNSOLVED" else "조치완료",
+        "시각": ui.dt_text(r["at"], "%m.%d %H:%M"), "심각도": ui.SEVERITY_LABEL.get(r["severity"], r["severity"]),
+        "유형": r["type_label"], "내용": r["text"], "차량": f"{r['plate']} · {r['driver']}", "위치": r["location"],
+        "상태": ui.state_text(r["status"]),
     } for r in rows])
     event = st.dataframe(df, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row",
-                         key="anomaly_table", column_config={
-                             "로그 ID": st.column_config.TextColumn(width=130),
-                             "시각": st.column_config.TextColumn(width=85),
-                             "차량": st.column_config.TextColumn(width=150),
+                         key="anomaly_table", height=ui.table_height(len(df)), column_config={
+                             "시각": st.column_config.TextColumn(width=80),
+                             "심각도": st.column_config.TextColumn(width=55),
                              "유형": st.column_config.TextColumn(width=80),
-                             "내용": st.column_config.TextColumn(width=200),
-                             "위치": st.column_config.TextColumn(width=190),
-                             "심각도": st.column_config.TextColumn(width=65),
+                             "내용": st.column_config.TextColumn(width=250, help="칸에 마우스를 올리면 전체 내용"),
+                             "차량": st.column_config.TextColumn(width=140),
+                             "위치": st.column_config.TextColumn(width=150, help="칸에 마우스를 올리면 전체 위치"),
                              "상태": st.column_config.TextColumn(width=70)})
     sel = event.selection.rows
     if not sel or sel[0] >= len(rows):
@@ -486,7 +486,7 @@ def anomalies():
     temp = (f' · 현재 {ui.temp_text(r["temp_now"])} / 설정 {ui.temp_text(r["temp_set"])}'
             if r["type"] == "COLD" and r["temp_now"] is not None else "")
     ui.html(f'<div class="ct-card"><div class="ct-row"><span class="ct-mono">{r["id"]} · {ui.dt_text(r["at"], "%H:%M:%S")}</span>'
-            f'{ui.pill(r["severity"], ui.STATUS_TONE[r["severity"]])}</div>'
+            f'{ui.pill(ui.SEVERITY_LABEL.get(r["severity"], r["severity"]), ui.STATUS_TONE[r["severity"]])}</div>'
             f'<div class="ct-big" style="margin-top:4px">{r["text"]}</div>'
             f'<div class="ct-muted">{r["plate"]} · {r["driver"]} 차주 ({r["phone"]}) · {r["location"]}</div>'
             f'<div class="ct-muted">{r["detail"]}{temp}</div></div>')
@@ -608,13 +608,27 @@ def metrics_panel(m: dict | None):
              "note": f"lgb_score < {m['ml_threshold']:.2f} → 자동 제안 안 함"},
         ])
         if m["recent"]:
+            # 열 이름은 짧게(설명은 머리글 툴팁) · 값이 없으면 '-'
+            c = st.column_config.TextColumn
             st.dataframe(pd.DataFrame([{
-                "라운드": r["id"], "시각": ui.dt_text(r["at"], "%H:%M:%S"), "화물": r["orders"], "후보 기사": r["drivers"],
-                "배정": r["assigned"], "지연(ms)": r["latency_ms"], "헝가리안 상차(km)": r["hungarian_avg_km"],
-                "최단거리 기준선(km)": r.get("nearest_avg_km"), "단축률 vs 최단(%)": r.get("deadhead_vs_nearest_pct"),
-                "그리디 상차(km)": r["greedy_avg_km"], "단축률 vs 그리디(%)": r["deadhead_reduction_pct"],
-                "임계값 차단": r["threshold_filtered"], "실패": r["failed"],
-            } for r in m["recent"]]), hide_index=True, width="stretch")
+                "라운드": r["id"], "시각": ui.dt_text(r["at"], "%H:%M:%S"), "화물": r["orders"], "후보": r["drivers"],
+                "배정": r["assigned"], "지연": ui.num(r["latency_ms"], "{:,.0f}ms"),
+                "헝가리안": ui.num(r["hungarian_avg_km"], "{:.1f}km"), "최단거리": ui.num(r.get("nearest_avg_km"), "{:.1f}km"),
+                "단축(최단)": ui.num(r.get("deadhead_vs_nearest_pct"), "{:.1f}%"),
+                "그리디": ui.num(r["greedy_avg_km"], "{:.1f}km"), "단축(그리디)": ui.num(r["deadhead_reduction_pct"], "{:.1f}%"),
+                "차단": r["threshold_filtered"], "실패": r["failed"],
+            } for r in m["recent"]]), hide_index=True, width="stretch", height=ui.table_height(len(m["recent"])),
+                column_config={
+                "라운드": c(width=80), "시각": c(width=70), "화물": st.column_config.NumberColumn(width=45),
+                "후보": st.column_config.NumberColumn(width=45, help="후보 기사 수"),
+                "배정": st.column_config.NumberColumn(width=45), "지연": c(width=65, help="배정 라운드 처리 시간"),
+                "헝가리안": c(width=75, help="헝가리안 배정 평균 상차 거리"),
+                "최단거리": c(width=75, help="단순 최단거리 매칭(기준선) 평균 상차 거리"),
+                "단축(최단)": c(width=75, help="최단거리 기준선 대비 상차 거리 단축률"),
+                "그리디": c(width=70, help="점수순 그리디 배정 평균 상차 거리"),
+                "단축(그리디)": c(width=85, help="점수순 그리디 대비 상차 거리 단축률"),
+                "차단": st.column_config.NumberColumn(width=45, help="AI 임계값으로 자동 제안에서 뺀 기사-화물 쌍"),
+                "실패": st.column_config.NumberColumn(width=45)})
         g = ui.load(api.get, "/admin/agent/tuning")
         ui.html('<div class="ct-muted" style="font-size:12.5px;margin-top:6px"><b>AI 조절 가이드</b> (자동 적용하지 않음)'
                 + "".join(f'<div style="margin-top:3px">• {ui.escape(t["target"])}: {ui.escape(str(t["now"]))} → '
@@ -675,31 +689,37 @@ def matching():
 
     ui.section("최근 배차 확정", "최근 10건")
     if d["recent"]:
+        # 화면 폭(약 960px) 안에 11열이 다 보이게 너비 지정 · 적재율은 정수 % · 값이 없으면 '-'
+        c = st.column_config.TextColumn
+        pct = lambda v: None if v is None else round(v * 100)  # noqa: E731
         st.dataframe(pd.DataFrame([{
             "화물 ID": r["id"], "화물": r["title"], "기사": r["driver"], "차종": r["truck_type"],
-            "방식": r["by"], "상차 거리": r["pickup_km"], "유효 적재율": r.get("util"), "부피 적재율": r["volume_util"],
-            "점수": round(r["score"] * 100) if r["score"] is not None else None, "제안 횟수": r["offers"],
-            "배차 소요": ui.duration(r["match_seconds"]),
-        } for r in d["recent"]]), hide_index=True, width="stretch", column_config={
-            "상차 거리": st.column_config.NumberColumn(format="%.1fkm"),
-            "유효 적재율": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1,
+            "방식": r["by"], "상차 거리": ui.num(r["pickup_km"], "{:.1f}km"),
+            "유효 적재율": pct(r.get("util")), "부피": ui.num(pct(r["volume_util"]), "{}%"),
+            "점수": ui.num(round(r["score"] * 100) if r["score"] is not None else None, "{}점"),
+            "제안": ui.num(r["offers"], "{}회"), "배차 소요": ui.duration(r["match_seconds"]),
+        } for r in d["recent"]]), hide_index=True, width="stretch", height=ui.table_height(len(d["recent"])),
+            column_config={
+            "화물 ID": c(width=125), "화물": c(width=140), "기사": c(width=60), "차종": c(width=90),
+            "방식": c(width=75), "상차 거리": c(width=70),
+            "유효 적재율": st.column_config.ProgressColumn(format="%d%%", min_value=0, max_value=100, width=115,
                                                        help="부피 · 중량 중 큰 쪽"),
-            "부피 적재율": st.column_config.ProgressColumn(format="percent", min_value=0, max_value=1),
-            "점수": st.column_config.NumberColumn(format="%d점"),
-            "제안 횟수": st.column_config.NumberColumn(format="%d회"),
+            "부피": c(width=50, help="부피 적재율"), "점수": c(width=50), "제안": c(width=45, help="제안 횟수"),
+            "배차 소요": c(width=70),
         })
 
     ui.section("기사별 매칭 현황", "배정 건수 많은 순")
+    c = st.column_config.TextColumn
     st.dataframe(pd.DataFrame([{
         "기사": r["name"], "차량": r["plate"], "차종": r["truck_type"],
-        "현재": "이용 제한" if r.get("blacklisted") else r["state"], "배정 건수": r["matched"],
-        "평점": r.get("rating"), "리뷰": r.get("reviews"),
-        "평균 상차 거리": r["avg_pickup_km"], "받은 제안": r["offers"], "수락률": r["accept_rate"],
-    } for r in d["drivers"]]), hide_index=True, width="stretch", column_config={
-        "평점": st.column_config.NumberColumn(format="★%.1f", help="화주 리뷰 평균 · 매칭 AI 피처"),
-        "리뷰": st.column_config.NumberColumn(format="%d건"),
-        "배정 건수": st.column_config.NumberColumn(format="%d건"),
-        "평균 상차 거리": st.column_config.NumberColumn(format="%.1fkm"),
-        "받은 제안": st.column_config.NumberColumn(format="%d건"),
-        "수락률": st.column_config.ProgressColumn(format="%.0f%%", min_value=0, max_value=100),
+        "현재": "이용 제한" if r.get("blacklisted") else r["state"], "배정": ui.num(r["matched"], "{}건"),
+        "평점": ui.rating_text(r.get("rating")), "리뷰": ui.num(r.get("reviews"), "{}건"),
+        "평균 상차 거리": ui.num(r["avg_pickup_km"], "{:.1f}km"), "받은 제안": ui.num(r["offers"], "{}건"),
+        "수락률": r["accept_rate"],
+    } for r in d["drivers"]]), hide_index=True, width="stretch", height=ui.table_height(len(d["drivers"]), 20),
+        column_config={
+        "기사": c(width=65), "차량": c(width=110), "차종": c(width=95), "현재": c(width=90),
+        "배정": c(width=55, help="배정 건수"), "평점": c(width=60, help="화주 리뷰 평균 · 매칭 AI 피처"),
+        "리뷰": c(width=50), "평균 상차 거리": c(width=95), "받은 제안": c(width=70),
+        "수락률": st.column_config.ProgressColumn(format="%.0f%%", min_value=0, max_value=100, width=130),
     })

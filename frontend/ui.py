@@ -40,6 +40,18 @@ MAP_COLORS = {
     "transit": [59, 130, 246], "cold": [20, 184, 166], "empty": [34, 197, 94], "anomaly": [239, 68, 68],
 }
 KIND_LABEL = {"transit": "운행중", "cold": "콜드체인", "empty": "공차 대기", "anomaly": "이상 감지"}
+# 표에 영어 코드 대신 보여 줄 한글 (화물 · 청구 상태, 추적 기록, 심각도)
+STATE_LABEL = {
+    "MATCHING": "매칭중", "ASSIGNED": "배차", "IN_TRANSIT": "운행중", "DELIVERED": "하차완료", "SETTLED": "정산완료",
+    "UNBILLED": "청구 대기", "REQUESTED": "청구됨", "PAID": "결제완료", "REFUNDED": "환불",
+    "TRANSFERRED": "송금완료",
+    "DEVIATED": "경로 이탈", "SUSPICIOUS": "재위탁 의심",
+    "COLD": "온도 이상", "STAGNATION": "장시간 정체", "DEVIATION": "경로 이탈",
+    "UNSOLVED": "미해결", "RESOLVED": "조치완료",
+    "PENDING": "승인 대기", "APPROVED": "승인", "REJECTED": "반려",
+    "AUTO_PASS": "자동 통과", "AUTO_REJECT": "자동 차단", "BLACKLISTED": "이용 제한", "ACTIVE": "정상",
+}
+SEVERITY_LABEL = {"HIGH": "긴급", "MEDIUM": "주의", "LOW": "참고"}
 LOGO = '<span class="ct-logo"><span class="ct-mark"></span>배차의 민족</span>'
 
 # 전역 CSS 는 static/style.css 에 있다 (정적 리소스)
@@ -55,6 +67,26 @@ def inject_css():
 # ---------------------------------------------------------------- 포맷터
 def won(n: int | float | None) -> str:
     return "-" if n is None else f"{int(n):,}원"
+
+
+def state_text(code: str | None) -> str:
+    """상태 코드 → 한글 (없으면 '-', 모르는 코드는 그대로)."""
+    return "-" if not code else STATE_LABEL.get(code, code)
+
+
+def num(v: int | float | None, fmt: str = "{:,}") -> str:
+    """표 칸용 숫자 → 글자. 값이 없으면 'None' 대신 '-'."""
+    return "-" if v is None else fmt.format(v)
+
+
+def rating_text(avg: float | None) -> str:
+    """표 칸용 평점 (리뷰가 없으면 '-')."""
+    return "-" if avg is None else f"★{avg:.1f}"
+
+
+def table_height(n: int, max_rows: int = 15) -> int:
+    """행 수에 맞춘 표 높이 (머리글 38px + 행 35px). max_rows 를 넘으면 표 안에서 스크롤."""
+    return 38 + 35 * max(1, min(n, max_rows)) + 2
 
 
 def manwon(n: int | float | None) -> str:

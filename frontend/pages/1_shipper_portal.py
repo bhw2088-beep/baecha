@@ -463,7 +463,8 @@ def _items_df(items: list[dict]) -> pd.DataFrame:
         "품목": i["name"], "길이(mm)": i["length"], "폭(mm)": i["width"], "높이(mm)": i["height"],
         "무게(kg)": float(i["weight"]), "수량": i["qty"], "세움 고정": i["upright"], "적층 불가": not i["stackable"],
         "파손주의": bool(i.get("fragile")), "냉동": bool(i.get("frozen")),
-        "상부 허용하중(kg)": i["max_top_load"], "하차 순서": i["drop"],
+        # 제한 없음 = 빈칸: 숫자 열은 빈칸을 'None' 글자로 보여 줘서 이 열만 글자 열로 (등록할 때 숫자로 검사)
+        "상부 허용하중(kg)": "" if i["max_top_load"] is None else f"{i['max_top_load']:g}", "하차 순서": i["drop"],
     } for i in items], columns=list(COLS))
 
 
@@ -479,7 +480,16 @@ def _df_to_items(df: pd.DataFrame) -> tuple[list[dict], list[str]]:
             errors.append(f"{n}번째 줄: {', '.join(missing)} 입력 필요")
             continue
         cap = row.get("상부 허용하중(kg)")
-        cap = None if cap is None or (isinstance(cap, float) and math.isnan(cap)) else float(cap)
+        if cap is None or (isinstance(cap, float) and math.isnan(cap)) or str(cap).strip() == "":
+            cap = None                       # 빈칸 = 제한 없음
+        else:
+            try:
+                cap = float(str(cap).replace(",", "").strip())
+                if cap < 0:
+                    raise ValueError
+            except ValueError:
+                errors.append(f"{n}번째 줄: 상부하중은 0 이상의 숫자로 입력 (비우면 제한 없음)")
+                continue
         drop = row.get("하차 순서")
         items.append({
             "name": str(row["품목"]), "length": int(row["길이(mm)"]), "width": int(row["폭(mm)"]),
@@ -523,7 +533,7 @@ def new_order_page():
 
     # ---------------------------------------------------------------- ② 적재 품목
     with st.container(border=True):
-        ui.section("② 적재 품목 (Packing List)", "단위 mm · kg · 빈칸의 상부 허용하중 = 제한 없음")
+        ui.section("② 적재 품목 (Packing List)", "길이 · 폭 · 높이 mm · 무게 · 상부하중 kg · 상부하중 빈칸 = 제한 없음 · 열 이름에 마우스를 올리면 설명")
         s1, s2, _ = st.columns([2, 1, 3], vertical_alignment="bottom")
         sample = s1.selectbox("샘플 시나리오", list(pack_meta["samples"]), key="no_sample")
         if s2.button("샘플 불러오기", icon=":material/inventory_2:", width="stretch"):
@@ -537,21 +547,27 @@ def new_order_page():
             st.session_state.no_df = _items_df(pack_meta["samples"][next(iter(pack_meta["samples"]))]["items"])
         edited = st.data_editor(
             st.session_state.no_df, key="no_editor", num_rows="dynamic", hide_index=True, width="stretch",
+            # 열 제목은 짧게 (잘리지 않게) · 단위는 위 안내 문구에 · 데이터 열 이름(COLS)은 그대로
             column_config={
-                "품목": st.column_config.TextColumn(required=True, width=170),
-                "길이(mm)": st.column_config.NumberColumn(min_value=50, max_value=13000, step=10, format="%d", width=78),
-                "폭(mm)": st.column_config.NumberColumn(min_value=50, max_value=2500, step=10, format="%d", width=70),
-                "높이(mm)": st.column_config.NumberColumn(min_value=50, max_value=3000, step=10, format="%d", width=78),
-                "무게(kg)": st.column_config.NumberColumn(min_value=0.1, max_value=25000, step=0.5, format="%.1f", width=78),
-                "수량": st.column_config.NumberColumn(min_value=1, max_value=300, step=1, format="%d", width=55),
-                "세움 고정": st.column_config.CheckboxColumn(width=70, help="This side up — 눕히거나 뒤집지 않고 수직축 회전만 허용"),
-                "적층 불가": st.column_config.CheckboxColumn(width=70, help="이 품목 위에는 아무것도 올리지 않음"),
-                "파손주의": st.column_config.CheckboxColumn(width=70, help="파손주의 — 최상단에만 배치 (위 적재 금지)"),
-                "냉동": st.column_config.CheckboxColumn(width=55, help="냉동 화물 — 최상단에만 배치 (냉기 순환 · 결로 방지)"),
-                "상부 허용하중(kg)": st.column_config.NumberColumn(min_value=0, step=10, format="%d", width=110,
-                                                            help="이 품목 위에 쌓일 수 있는 총 무게. 비우면 제한 없음"),
-                "하차 순서": st.column_config.NumberColumn(min_value=1, max_value=9, step=1, format="%d", width=70,
-                                                       help="1 = 가장 먼저 내림. 다중 하차지일 때 사용"),
+                "품목": st.column_config.TextColumn("품목", required=True, width=190),
+                "길이(mm)": st.column_config.NumberColumn("길이", min_value=50, max_value=13000, step=10, format="%d",
+                                                         width=68, help="길이 (mm)"),
+                "폭(mm)": st.column_config.NumberColumn("폭", min_value=50, max_value=2500, step=10, format="%d",
+                                                       width=62, help="폭 (mm)"),
+                "높이(mm)": st.column_config.NumberColumn("높이", min_value=50, max_value=3000, step=10, format="%d",
+                                                         width=62, help="높이 (mm)"),
+                "무게(kg)": st.column_config.NumberColumn("무게", min_value=0.1, max_value=25000, step=0.5,
+                                                         format="%.1f", width=72, help="상자 1개 무게 (kg)"),
+                "수량": st.column_config.NumberColumn("수량", min_value=1, max_value=300, step=1, format="%d", width=55),
+                "세움 고정": st.column_config.CheckboxColumn("세움", width=52,
+                                                          help="세움 고정 (This side up) — 눕히거나 뒤집지 않고 수직축 회전만 허용"),
+                "적층 불가": st.column_config.CheckboxColumn("적층✕", width=62, help="적층 불가 — 이 품목 위에는 아무것도 올리지 않음"),
+                "파손주의": st.column_config.CheckboxColumn("파손", width=52, help="파손주의 — 최상단에만 배치 (위 적재 금지)"),
+                "냉동": st.column_config.CheckboxColumn("냉동", width=52, help="냉동 화물 — 최상단에만 배치 (냉기 순환 · 결로 방지)"),
+                "상부 허용하중(kg)": st.column_config.TextColumn("상부하중", width=80, alignment="right", validate=r"^\s*\d*(\.\d+)?\s*$",
+                                                          help="상부 허용하중 (kg) — 이 품목 위에 쌓일 수 있는 총 무게. 비우면 제한 없음"),
+                "하차 순서": st.column_config.NumberColumn("하차", min_value=1, max_value=9, step=1, format="%d",
+                                                       width=52, help="하차 순서 — 1 = 가장 먼저 내림. 다중 하차지일 때 사용"),
             },
         )
         items, errors = _df_to_items(edited)

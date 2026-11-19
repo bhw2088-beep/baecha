@@ -19,7 +19,7 @@ Phase 6: 마이크로 배치 매칭 스트레스 테스트 + GPS 디바운싱 �
 실행: 수정본 폴더에서
     python tests/stress_test.py                    # 기본 (주문 120 · 기사 45)
     python tests/stress_test.py --quick            # CI 용 (주문 30 · 기사 18)
-    python tests/stress_test.py --out docs/benchmark_metrics.json
+    python tests/stress_test.py --out docs/설명/benchmark_metrics.json
     # 대규모 단발 배치 (한 줄): 8일 × 하루 1,001건 = 8,008건 · 기사 400명 · 30분 시간 제한
     #   → 관제 KPI(매칭 · 적재)의 측정 기준 (backend/data/benchmark_large.json 사본을 /admin/kpi 가 읽음)
     python tests/stress_test.py --preset 8k          # 결과: stress_8k/results/benchmark_large.json · large_run/*.csv

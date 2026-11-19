@@ -33,7 +33,7 @@ section("서버 · 메타")
 try:
     call("GET", "/health")
 except requests.ConnectionError:
-    print(f"  백엔드에 연결할 수 없습니다: {API}\n  docs/실행방법.md 의 [실행] 단계로 백엔드를 먼저 켜 주세요.")
+    print(f"  백엔드에 연결할 수 없습니다: {API}\n  docs/가이드/실행방법.md 의 [실행] 단계로 백엔드를 먼저 켜 주세요.")
     sys.exit(2)
 meta = call("GET", "/meta")
 check("지역 드롭다운 목록", len(meta["regions"]) >= 40, f"{len(meta['regions'])}곳")

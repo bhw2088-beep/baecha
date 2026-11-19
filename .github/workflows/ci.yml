@@ -7,7 +7,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master, staging]   # 브랜치 전략: docs/브랜치_전략.md
+    branches: [main, master, staging]   # 브랜치 전략: docs/가이드/브랜치_전략.md
   pull_request:
 
 jobs:

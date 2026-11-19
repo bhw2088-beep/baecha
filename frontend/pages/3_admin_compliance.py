@@ -32,7 +32,9 @@ def page():
         {"label": "감사 로그", "value": len(audit), "unit": "건", "note": "최근 500건 · SHA-256 해시 체인"},
         {"label": "재무 변경", "value": sum(1 for e in audit if e["financial"]), "unit": "건",
          "note": "청구 · 결제 · 취소"},
-        {"label": "결제 승인 (모의 PG)", "value": ui.won(sum(p["amount"] for p in payments if p["status"] == "APPROVED")),
+        # 카드 폭에서 잘리지 않게 만원 단위로 (예: 265.3만원)
+        {"label": "결제 승인 (모의 PG)", "unit": "원",
+         "value": ui.manwon(sum(p["amount"] for p in payments if p["status"] == "APPROVED")),
          "note": f"취소 {sum(1 for p in payments if p['status'] == 'CANCELLED')}건"},
     ])
     po = ui.load(api.get, "/admin/payouts")
@@ -67,8 +69,11 @@ def _payouts_tab(po: dict):
         st.dataframe(pd.DataFrame([{
             "기사": f"{r['driver']} ({r['driver_id']})", "차량": r["plate"], "건수": r["count"],
             "결제 합계": r["gross"], "수수료": r["fee"], "송금액": r["net"], "화물": ", ".join(r["orders"]),
-        } for r in pend]), hide_index=True, width="stretch", column_config={
-            k: st.column_config.NumberColumn(format="%,d원") for k in ("결제 합계", "수수료", "송금액")})
+        } for r in pend]), hide_index=True, width="stretch", height=ui.table_height(len(pend)), column_config={
+            "기사": st.column_config.TextColumn(width=120), "차량": st.column_config.TextColumn(width=110),
+            "건수": st.column_config.NumberColumn(format="%d건", width=55),
+            **{k: st.column_config.NumberColumn(format="%,d원", width=100) for k in ("결제 합계", "수수료", "송금액")},
+            "화물": st.column_config.TextColumn(width=300, help="칸에 마우스를 올리면 전체 화물 ID")})
         if st.button(f"{len(pend)}명에게 일괄 송금 (모의)", type="primary", icon=":material/payments:"):
             if ui.act(api.post, "/admin/payouts/run", json={"driver_ids": []},
                       success=f"{len(pend)}명에게 {ui.won(sum(r['net'] for r in pend))} 송금했습니다 (모의 이체)."):
@@ -81,8 +86,13 @@ def _payouts_tab(po: dict):
             "송금 번호": h["id"], "일시": ui.dt_text(h["at"], "%m.%d %H:%M"), "기사": h["driver"], "건수": h["count"],
             "결제 합계": h["gross"], "수수료": h["fee"], "송금액": h["net"], "계좌": h["bank"], "거래번호": h["tid"],
             "처리": h["by"],
-        } for h in po["history"]]), hide_index=True, width="stretch", column_config={
-            k: st.column_config.NumberColumn(format="%,d원") for k in ("결제 합계", "수수료", "송금액")})
+        } for h in po["history"]]), hide_index=True, width="stretch", height=ui.table_height(len(po["history"])),
+            column_config={
+            "송금 번호": st.column_config.TextColumn(width=110), "일시": st.column_config.TextColumn(width=80),
+            "기사": st.column_config.TextColumn(width=60), "건수": st.column_config.NumberColumn(format="%d건", width=50),
+            **{k: st.column_config.NumberColumn(format="%,d원", width=95) for k in ("결제 합계", "수수료", "송금액")},
+            "계좌": st.column_config.TextColumn(width=130), "거래번호": st.column_config.TextColumn(width=125),
+            "처리": st.column_config.TextColumn(width=80)})
 
 
 # ------------------------------------------------------------------ 가입 승인
@@ -122,29 +132,40 @@ def _drivers_tab(drivers: list[dict]):
     ui.section("전체 차주", f"{len(drivers)}명")
     st.caption("배차 가능 = 관제 승인 + 사업용 노란 번호판(바 · 사 · 아 · 자) + 이용 제한 아님. "
                "사업자번호는 Mod-10 검증 + 국세청 상태(키 없으면 모의 판정).")
+    def _reasons(d: dict) -> str:
+        # 서류 · 번호판 문제 + 이용 제한 + 반려 사유를 ' / ' 로 (앞에 ' / ' 가 붙지 않게 목록으로 모아서 잇는다)
+        why = list(d["compliance"]["issues"]) + (["이용 제한"] if d["blacklisted"] else [])
+        if not why and d.get("reason"):
+            why.append(d["reason"])
+        return " / ".join(why) or "-"
+
+    c = st.column_config.TextColumn
     st.dataframe(pd.DataFrame([{
-        "기사": d["name"], "ID": d["id"], "차종": d["truck_type"], "톤수": d["compliance"]["tonnage"],
+        "기사": d["name"], "ID": d["id"], "차종": d["truck_type"], "톤수": f'{d["compliance"]["tonnage"]:g}톤',
         "차량": d["plate"], "번호판": PLATE_LABEL.get(d["compliance"]["plate_type"], "-"),
-        "심사": {"PENDING": "승인 대기", "APPROVED": "승인", "REJECTED": "반려"}.get(d["status"], d["status"]),
-        "평점": (d.get("rating") or {}).get("avg"), "리뷰": (d.get("rating") or {}).get("count"),
-        "배차 가능": "가능" if d["dispatchable"] else "불가", "사유": " / ".join(d["compliance"]["issues"])
-        + (" / 이용 제한" if d["blacklisted"] else "") or (d.get("reason") or ""),
-    } for d in drivers]), hide_index=True, width="stretch", column_config={
-        "톤수": st.column_config.NumberColumn(format="%.1f톤"),
-        "평점": st.column_config.NumberColumn(format="%.2f★")})
+        "심사": ui.state_text(d["status"]),
+        "평점": ui.rating_text((d.get("rating") or {}).get("avg")),
+        "리뷰": ui.num((d.get("rating") or {}).get("count"), "{}건"),
+        "배차": "가능" if d["dispatchable"] else "불가", "사유": _reasons(d),
+    } for d in drivers]), hide_index=True, width="stretch", height=ui.table_height(len(drivers), 20), column_config={
+        "기사": c(width=65), "ID": c(width=60), "차종": c(width=95), "톤수": c(width=50), "차량": c(width=110),
+        "번호판": c(width=95), "심사": c(width=65), "평점": c(width=55), "리뷰": c(width=45),
+        "배차": c(width=45, help="배차 가능 여부"), "사유": c(width=240, help="칸에 마우스를 올리면 전체 사유")})
 
 
 # ------------------------------------------------------------------ 리뷰 · 블랙리스트
 def _reviews_tab(rep: list[dict]):
     tags = ui.load(api.get, "/reviews/tags")
     st.caption(f"화주 ↔ 기사 상호 별점 · 태그 평가. 기사 평점은 매칭 AI 피처로 쓰입니다. {tags['blacklist_rule']}")
+    c = st.column_config.TextColumn
     st.dataframe(pd.DataFrame([{
-        "기사": f"{r['name']} ({r['id']})", "차량": r["plate"], "평점": r["avg"], "리뷰": r["count"],
-        "주요 태그": ", ".join(r["top_tags"]),
+        "기사": f"{r['name']} ({r['id']})", "차량": r["plate"], "평점": ui.rating_text(r["avg"]),
+        "리뷰": ui.num(r["count"], "{}건"), "주요 태그": ", ".join(r["top_tags"]) or "-",
         "상태": "이용 제한" if r["blacklisted"] else ("주의" if r["at_risk"] else "정상"),
-        "제한 사유": (r["blacklist"] or {}).get("reason", "") if r["blacklisted"] else "",
-    } for r in rep]), hide_index=True, width="stretch", column_config={
-        "평점": st.column_config.NumberColumn(format="%.2f★")})
+        "제한 사유": ((r["blacklist"] or {}).get("reason") or "-") if r["blacklisted"] else "-",
+    } for r in rep]), hide_index=True, width="stretch", height=ui.table_height(len(rep), 20), column_config={
+        "기사": c(width=120), "차량": c(width=110), "평점": c(width=60), "리뷰": c(width=50),
+        "주요 태그": c(width=240), "상태": c(width=70), "제한 사유": c(width=220)})
     with st.container(border=True):
         ui.section("이용 제한 · 해제", "제한하면 매칭 후보에서 바로 빠지고 진행 중인 제안도 회수됩니다")
         c1, c2, c3, c4 = st.columns([1.6, 2.2, 0.8, 0.8], vertical_alignment="bottom")
@@ -166,8 +187,10 @@ def _reviews_tab(rep: list[dict]):
             "일시": ui.dt_text(r["at"], "%m.%d %H:%M"), "화물": r["order_id"],
             "방향": "화주 → 기사" if r["to_role"] == "driver" else "기사 → 화주",
             "작성": r["writer"], "대상": r["target"], "별점": "★" * r["stars"] + "☆" * (5 - r["stars"]),
-            "태그": ", ".join(r["tags"]), "코멘트": r["comment"],
-        } for r in reviews]), hide_index=True, width="stretch")
+            "태그": ", ".join(r["tags"]) or "-", "코멘트": r["comment"] or "-",
+        } for r in reviews]), hide_index=True, width="stretch", height=ui.table_height(len(reviews)), column_config={
+            "일시": c(width=80), "화물": c(width=125), "방향": c(width=85), "작성": c(width=70), "대상": c(width=90),
+            "별점": c(width=80), "태그": c(width=180), "코멘트": c(width=200, help="칸에 마우스를 올리면 전체 코멘트")})
 
 
 # ------------------------------------------------------------------ 감사 로그
@@ -187,15 +210,20 @@ def _audit_tab(audit: list[dict]):
     if not rows:
         st.info("조건에 맞는 이력이 없습니다.")
         return
+    # 12열 → 9열: 이전 · 이후 상태는 '운행중 → 하차완료' 한 칸(한글), 해시는 현재 해시 앞 8자리
+    # (감사 번호 · 이전 해시는 칸에 마우스를 올리면 툴팁으로) · 값이 없으면 '-'
+    c = st.column_config.TextColumn
     st.dataframe(pd.DataFrame([{
-        "번호": e["id"], "일시": ui.dt_text(e["at"], "%m.%d %H:%M:%S"), "화물 ID": e["order_id"],
+        "일시": ui.dt_text(e["at"], "%m.%d %H:%M:%S"), "화물 ID": e["order_id"] or "-",
         "구분": "재무" if e["financial"] else ("청구" if e["kind"] == "billing" else "화물"),
-        "이벤트": e["label"], "이전": e["from"] or "-", "이후": e["to"], "누가": e["actor"],
-        "금액": e["amount"], "비고": e["note"],
-        "해시": (e.get("current_hash") or "")[:12], "이전 해시": (e.get("previous_hash") or "")[:12],
-    } for e in rows]), hide_index=True, width="stretch", height=480, column_config={
-        "금액": st.column_config.NumberColumn(format="%,d원"),
-        "비고": st.column_config.TextColumn(width="large")})
+        "이벤트": e["label"], "상태 변화": f'{ui.state_text(e["from"])} → {ui.state_text(e["to"])}',
+        "누가": e["actor"] or "-", "금액": ui.won(e["amount"]), "비고": e["note"] or "-",
+        "해시": (e.get("current_hash") or "-")[:8],
+    } for e in rows]), hide_index=True, width="stretch", height=ui.table_height(len(rows)), column_config={
+        "일시": c(width=105), "화물 ID": c(width=130), "구분": c(width=45), "이벤트": c(width=140),
+        "상태 변화": c(width=125), "누가": c(width=115), "금액": c(width=70),
+        "비고": c(width=125, help="칸에 마우스를 올리면 전체 비고"),
+        "해시": c(width=75, help="이 줄의 SHA-256 해시 앞 8자리 (직전 줄 해시를 이어 계산)")})
 
 
 # ------------------------------------------------------------------ 결제 내역 · 취소
@@ -205,12 +233,16 @@ def _payments_tab(payments: list[dict]):
         st.info("결제 내역이 없습니다.")
         return
     df = pd.DataFrame([{
-        "결제일": p["approved_at"][:16].replace("T", " "), "화물 ID": p["order_id"], "화물": p["title"],
+        "결제일": ui.dt_text(p["approved_at"], "%m.%d %H:%M"), "화물 ID": p["order_id"], "화물": p["title"],
         "화주": p["shipper"], "차주": p["driver"], "수단": p["method_label"], "거래번호": p["tid"],
         "금액": p["amount"], "상태": "승인" if p["status"] == "APPROVED" else "취소",
     } for p in payments])
+    c = st.column_config.TextColumn
     ev = st.dataframe(df, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row",
-                      key="pay_table", column_config={"금액": st.column_config.NumberColumn(format="%,d원")})
+                      key="pay_table", height=ui.table_height(len(df)), column_config={
+                          "결제일": c(width=85), "화물 ID": c(width=130), "화물": c(width=135), "화주": c(width=95),
+                          "차주": c(width=60), "수단": c(width=105), "거래번호": c(width=130),
+                          "금액": st.column_config.NumberColumn(format="%,d원", width=90), "상태": c(width=50)})
     sel = ev.selection.rows
     if not sel or sel[0] >= len(payments):
         st.caption("행을 선택하면 결제를 취소(환불)할 수 있습니다.")
