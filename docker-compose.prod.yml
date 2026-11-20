@@ -23,11 +23,8 @@
 name: baecha-prod
 
 # ---- 공통 설정 (앵커) ----------------------------------------------------------
-# 앱 서비스(backend · worker · frontend · simulator)는 이미지 하나(baecha-app:prod)를 같이 쓴다.
-#   → 빌드는 backend 에서 한 번만 하고, 나머지는 그 이미지를 재사용
+# 이미지는 3개: backend(API + Celery 워커 공용) · frontend(Streamlit) · simulator(가상 기사 GPS)
 x-app: &app
-  image: baecha-app:prod
-  pull_policy: never        # 레지스트리에서 받지 않고 backend 가 빌드한 이미지를 쓴다
   restart: unless-stopped
   security_opt:
     - no-new-privileges:true
@@ -103,12 +100,15 @@ services:
   # ---- 앱 ---------------------------------------------------------------------
   backend:
     <<: *app
-    build: .                 # 앱 이미지 빌드는 여기서만
-    command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers
+    image: baecha-backend:prod
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 1 --proxy-headers
     env_file: .env
     environment: *app-env
     volumes:
-      - pod_photos:/app/backend/data/pod_photos   # 인수증 사진
+      - pod_photos:/app/src/data/pod_photos   # 인수증 사진
     ports:
       - "8000:8000"
     networks: [data, edge]   # DB · Redis(data) 와 화면 · 외부(edge) 사이 중계 · 국세청 · Gemini 호출은 edge 로
@@ -130,7 +130,9 @@ services:
   worker:
     # Celery 워커: 3D 빈패킹 등 무거운 계산 (브로커 · 결과 = Redis)
     <<: *app
-    command: celery -A backend.workers.celery_app worker -l info --concurrency 2 -n packer@%h
+    image: baecha-backend:prod
+    pull_policy: never        # backend 서비스가 빌드한 이미지를 같이 쓴다
+    command: celery -A src.workers.celery_app worker -l info --concurrency 2 -n packer@%h
     env_file: .env
     environment: *app-env
     networks: [data]          # Redis 만 쓰면 되므로 외부와 단절
@@ -145,7 +147,9 @@ services:
 
   frontend:
     <<: *app
-    command: python -m streamlit run frontend/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
+    image: baecha-frontend:prod
+    build: ./frontend
+    command: python -m streamlit run app/main.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
     environment:
       TZ: Asia/Seoul
       BAECHA_API_BASE: http://backend:8000/api/v1
@@ -168,6 +172,10 @@ services:
     # 가상 기사 GPS 시뮬레이터 — 프로필 'sim' 일 때만 실행
     <<: *app
     profiles: ["sim"]
+    image: baecha-simulator:prod
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
     command: python -m simulator.virtual_driver
     environment:
       TZ: Asia/Seoul

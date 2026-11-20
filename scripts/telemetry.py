@@ -15,7 +15,7 @@
     하차지 도착        POST /driver/runs/{id}/complete (전자 인수증) → 다시 공차
   --no-server 면 서버 없이 패킷만 (가까운 공차에게 직접 배정하는 간단한 흉내)
 
-실행 (수정본 폴더 · Docker Desktop 필요 · 서버 연동 시 도커 이미지 baecha-app:dev 필요)
+실행 (저장소 최상위 폴더 · Docker Desktop 필요 · 서버 연동 시 도커 이미지 baecha-backend:dev 필요)
     python scripts/telemetry.py                       # 기사 100명 · 5분 · 서버 연동 (VS Code 에서 ▷ 도 같음)
     python scripts/telemetry.py --minutes 10 --order-rate 1.0 --time-scale 60
     python scripts/telemetry.py --no-server           # 패킷만 (서버 · 도커 없이)

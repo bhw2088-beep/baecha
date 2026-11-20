@@ -44,7 +44,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 | 명세 | [컬럼명_리스트.md](docs/명세/컬럼명_리스트.md) | DB 테이블 · API 응답 필드 |
 | 설명 | [주요코드_설명.md](docs/설명/주요코드_설명.md) | 적재 · 매칭 · 관제 핵심 코드 |
 | 설명 | [벤치마킹_보고서.md](docs/설명/벤치마킹_보고서.md) | 아키텍처 · KPI 측정값 · 한계 |
-| 테스트 결과 | [stress_8k/README.md](stress_8k/README.md) | 8,008건 스트레스 테스트 실행 · 결과 |
+| 테스트 결과 | [stress_tests/README.md](backend/tests/stress_tests/README.md) | 8,008건 스트레스 테스트 실행 · 결과 |
 
 ---
 
@@ -83,9 +83,9 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 |---|---|---|
 | 0 | 사업자 Mod-10 · 국세청 API(선택) · 노란 번호판 · 필수 서류 3종 · prod compose | `engines/compliance_engine.py`, `docker-compose.prod.yml` |
 | 1 | 안전율 90/95%(경고/차단) · 축중량(산안법 173조) · 필수 최소 톤수 · 날씨/수급 서지 · 포아송 주문 | `engines/validation_engine.py`, `engines/pricing_engine.py`, `simulator/virtual_shipper.py` |
-| 2 | 하드 필터 · cf_score · LightGBM 10피처 · 0.75 임계값 · 매칭 메트릭스 | `engines/matcher/cf_score.py`, `models/metrics.py` |
-| 3 | GPS 핑 API · 재위탁 방지 · Shapely 이탈 3회 디바운싱 · 지연 감지 · 해시 체인 | `engines/tracking_engine.py`, `services/tracking_service.py`, `models/audit.py` |
-| 4 | 상호 리뷰(별점 · 태그) · 자동/수동 블랙리스트 | `services/review_service.py`, `models/review.py` |
+| 2 | 하드 필터 · cf_score · LightGBM 10피처 · 0.75 임계값 · 매칭 메트릭스 | `engines/matcher/cf_score.py`, `orm/models/metrics.py` |
+| 3 | GPS 핑 API · 재위탁 방지 · Shapely 이탈 3회 디바운싱 · 지연 감지 · 해시 체인 | `engines/tracking_engine.py`, `services/tracking_service.py`, `orm/models/audit.py` |
+| 4 | 상호 리뷰(별점 · 태그) · 자동/수동 블랙리스트 | `services/review_service.py`, `orm/models/review.py` |
 | 5 | Gemini Function Calling 관제 (키 없으면 규칙) · 인시던트 리포트 · 조절 가이드 | `engines/ai/gemini_agent.py`, `engines/ai/rule_agent.py` |
 | 6 | 마이크로 배치 스트레스 · GPS 오탐 검증 | `tests/stress_test.py` |
 | 8 | 벤치마킹 보고서 | `docs/설명/벤치마킹_보고서.md` |
@@ -95,43 +95,52 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 ## 폴더 구조
 
 ```
-수정본/  (b2b-logistics-saas)
-├── .github/workflows/ci.yml   # CI: pyflakes · 점검 스크립트 (3.12/3.14) + docker compose 통합 점검
+baecha/
+├── AGENTS.md / CLAUDE.md      # AI 에이전트 작업 규칙 (CLAUDE.md 는 AGENTS.md 를 가리키기만 함)
+├── .github/workflows/ci.yml   # CI: pyflakes · 백엔드 점검 (3.12/3.14) + docker compose 통합 점검
 ├── .env.example / .env        # 환경변수 템플릿 / 로컬 실제 값 (.env 는 git 제외)
 ├── docker-compose.yml         # db · redis · backend · worker · simulator · frontend
 ├── docker-compose.prod.yml    # 운영용 (포트 비공개 · 자동 재시작 · 헬스체크 · 시뮬레이터는 --profile sim)
-├── Dockerfile                 # 백엔드/워커/화면 공용 이미지 (Python 3.14)
-├── requirements.txt           # FastAPI · Streamlit · SQLAlchemy · PostGIS · Redis · Celery · LightGBM …
-├── backend/
-│   ├── main.py                # 앱 진입점 (CORS · 요청 후 DB 저장 · GPS 워커 시작 · /m 모바일 웹)
-│   ├── config.py              # pydantic-settings (.env)
-│   ├── core/                  # database.py(연결 · 저장소 · DB 동기화) · security.py · redis_client.py · seed.py · errors.py
-│   ├── models/                # user.py · order.py(orders · anomalies) · audit.py(해시 체인) · review.py · metrics.py
-│   ├── schemas/               # auth · order · settlement · matching(핑 · 메트릭스) · review
-│   ├── services/              # auth · order · matching · billing(AI 운임 · 수급 · MockPG) · tracking · review
-│   ├── engines/
-│   │   ├── packer/            # 3D 적재: rules.py(적재 규칙 R0~R10) · engine.py(규칙 + EP) · validate.py(규칙 재채점)
-│   │   ├── matcher/           # spatial.py(PostGIS) · cf_score.py · ml_ranker.py(LightGBM) · hungarian.py
-│   │   ├── compliance_engine.py · validation_engine.py · pricing_engine.py · tracking_engine.py
-│   │   ├── fsm/order_fsm.py   # 상태 전이 · 감사 로그 해시 체인
-│   │   └── ai/                # rule_agent.py(규칙) · gemini_agent.py(Gemini Function Calling)
-│   ├── workers/               # celery_app.py · packing_tasks.py · gps_stream_worker.py
-│   ├── api/                   # v1.py · endpoints/(auth · orders · matching · tracking · settlement · reviews)
-│   └── data/                  # route_cache.json(도로 경로 990개) · ml_ranker.txt/.json(학습된 모델)
-├── frontend/
-│   ├── app.py                 # 로그인 · 역할별 메뉴
-│   ├── pages/                 # 0_auth · 1_shipper_portal · 2_control_tower · 3_admin_compliance · 4_driver_app
-│   ├── reviews_ui.py          # 화주 · 차주 상호 평가 패널
-│   └── static/style.css       # 전역 스타일
-├── mobile_web/                # index.html · js/load_visualizer.js · css/mobile_style.css (Three.js r147 CDN)
-├── simulator/                 # virtual_driver.py(GPS) · virtual_shipper.py(가상 주문 · 부하 테스트)
-├── docs/
-│   ├── 가이드/                 # 실행방법 · 브랜치_전략
-│   ├── 명세/                   # 기능명세서 · 컬럼명_리스트
-│   ├── 설명/                   # 주요코드_설명 · 벤치마킹_보고서 · benchmark_metrics.json
-│   └── internal/              # 발표자료 · 변경점 정리 (git 제외 · 내부용)
-└── tests/                     # test_suites.py(pytest) · test_packing · test_matching · test_fsm · test_compliance ·
-                               # test_pricing · test_tracking · stress_test · smoke_test
+├── backend/                   # 백엔드 서버 (FastAPI · Celery)
+│   ├── Dockerfile             # API · 워커 공용 이미지 (빌드 컨텍스트: 저장소 최상위)
+│   ├── requirements.txt · requirements-dev.txt · pytest.ini
+│   ├── src/
+│   │   ├── main.py            # 앱 진입점 (CORS · 요청 후 DB 저장 · GPS 워커 시작 · /m 모바일 웹)
+│   │   ├── config.py          # pydantic-settings (.env)
+│   │   ├── routers/           # API 진입점 /api/v1 — auth · orders · matching · tracking · settlement · reviews · ai
+│   │   ├── orm/               # DB — database.py(연결 · 저장소 · 동기화) · seed.py · models/(user · order · audit · review · metrics)
+│   │   ├── schemas/           # 요청 · 응답 모델 (pydantic)
+│   │   ├── services/          # 기능 흐름 — auth · order · matching · billing(AI 운임 · 수급 · MockPG) · tracking · review
+│   │   ├── engines/           # 핵심 알고리즘
+│   │   │   ├── packer/        # 3D 적재: rules.py(R0~R10) · engine.py(규칙 + EP) · validate.py(재채점)
+│   │   │   ├── matcher/       # spatial.py(PostGIS) · cf_score.py · ml_ranker.py(LightGBM) · hungarian.py
+│   │   │   ├── fsm/           # 상태 전이 · 감사 로그 해시 체인
+│   │   │   ├── ai/            # rule_agent.py(규칙) · gemini_agent.py(Gemini Function Calling)
+│   │   │   └── compliance · validation · pricing · tracking · kpi
+│   │   ├── workers/           # celery_app.py · packing_tasks.py · gps_stream_worker.py
+│   │   ├── utils/             # 공용 — errors · security · redis_client · perf
+│   │   └── data/              # route_cache.json(도로 경로 990개) · ml_ranker.txt/.json(학습된 모델) · KPI 기준값
+│   └── tests/
+│       ├── conftest.py        # 공통 fixture (store: 시드 저장소 복사본)
+│       ├── unit_tests/        # 단위 테스트 — engines/ · services/ · orm/ · utils/ (test_ctor · _smoke · _actual)
+│       ├── e2e_tests/         # API 전체 흐름 (프로세스 안 TestClient 또는 E2E_API_BASE 서버)
+│       └── stress_tests/      # 마이크로 배치 · 적재 스트레스 + 8,000건 대량 테스트(1_kpi_8k.py ~ 5_packing_stress.py) · results/
+├── frontend/                  # 웹 화면 (Streamlit)
+│   ├── Dockerfile · requirements.txt · .streamlit/config.toml
+│   ├── app/
+│   │   ├── main.py            # 로그인 · 역할별 메뉴
+│   │   ├── pages/             # auth · shipper · driver · control_tower · compliance
+│   │   ├── components/        # 공용 UI — layout · badges · order · maps · feedback · pack_3d · loading_guide · reviews
+│   │   ├── utils/             # api · session · nav · format(포맷터) · theme(디자인 토큰)
+│   │   └── static/style.css   # 전역 스타일
+│   ├── mobile/                # 차주용 휴대폰 3D 적재 가이드 (Three.js · 백엔드가 /m 으로 서비스)
+│   └── scripts/               # patch_streamlit_lang.py (이미지 빌드 때 1회)
+├── simulator/                 # 가상 기사 GPS(virtual_driver) · 가상 화주 주문(virtual_shipper) · Dockerfile
+├── scripts/                   # 부하 테스트(simulator.py · telemetry.py · docker-compose.loadtest.yml) · build_routes.py
+└── docs/
+    ├── 가이드/                 # 실행방법 · 브랜치_전략
+    ├── 명세/                   # 기능명세서 · 컬럼명_리스트
+    └── 설명/                   # 주요코드_설명 · 벤치마킹_보고서 · benchmark_metrics.json
 ```
 
 ## 화면
@@ -161,10 +170,20 @@ CI 는 `main` · `staging` push 와 모든 PR 에서 실행. 자세한 규칙 ·
 ## 테스트
 
 ```bash
-docker compose exec backend python -m pytest      # 컨테이너 안 (pytest 설치 필요 시: pip install pytest)
-python -m pytest                                  # 로컬 (requirements-dev.txt 설치 후)
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest -q                               # 전부: 단위 + e2e + 빠른 스트레스 (서버 · DB · Redis 없이)
+python -m pytest tests/unit_tests -q              # 단위 테스트만 (가장 빠름)
+E2E_API_BASE=http://localhost:8000/api/v1 python -m pytest tests/e2e_tests   # 도커로 띄운 서버에 e2e
 ```
-점검 스크립트는 실제 DB 를 쓰지 않습니다(메모리 저장소). `smoke_test.py` 는 실행 중인 서버에 API 로 한 바퀴 돕니다.
+
+| 폴더 | 내용 | 이름 규칙 |
+|---|---|---|
+| `tests/unit_tests/` | 함수 · 클래스 하나씩 (엔진 · 서비스 · 저장소 · 공용 함수) | `test_ctor_*` 생성자 · 기본값 / `test_<대상>_smoke` 입력→출력 형태 / `test_<대상>_actual_*` 실제 규칙 · 경계값 |
+| `tests/e2e_tests/` | 등록 → 매칭 → 운행 → 인수증 → 청구 → 결제 → 리뷰 · 권한 · 관제 API | 흐름 순서대로 |
+| `tests/stress_tests/` | 마이크로 배치 · 적재 스트레스 (빠른 버전만 pytest) | `test_stress_quick_*` |
+
+테스트는 실제 DB 를 쓰지 않습니다(메모리 저장소). 단위 테스트는 엔진 규칙을 일부러 틀리게 바꾸면 바로 실패하는지까지 확인했습니다.
 
 ## 저장 방식
 메모리 저장소(Store)를 작업 사본으로 쓰고, 요청이 끝날 때마다 **바뀐 행만 PostgreSQL 에 UPSERT** 합니다.

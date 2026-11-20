@@ -6,10 +6,10 @@
 #     - 프런트 · 가상 기사 시뮬레이터 없음 (부하는 scripts/simulator.py 만 넣는다)
 #     - DEMO_AUTO_DELIVER=0 → 운행이 자동으로 끝나지 않아 GPS 핑을 계속 받을 수 있음
 #
-#   직접 다룰 때 (수정본 폴더에서)
+#   직접 다룰 때 (저장소 최상위 폴더에서)
 #     켜기:  docker compose -f scripts/docker-compose.loadtest.yml up -d
 #     끄기:  docker compose -f scripts/docker-compose.loadtest.yml down -v     (테스트 데이터까지 삭제)
-#   이미지는 시연 스택이 빌드한 baecha-app:dev 를 그대로 쓴다 (코드를 바꿨으면 먼저 docker compose up --build -d)
+#   이미지는 시연 스택이 빌드한 baecha-backend:dev 를 그대로 쓴다 (코드를 바꿨으면 먼저 docker compose up --build -d)
 name: baecha-load
 
 x-app-env: &app-env
@@ -48,9 +48,9 @@ services:
       retries: 30
 
   backend:
-    image: baecha-app:dev
+    image: baecha-backend:dev
     pull_policy: never
-    command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+    command: python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
     environment: *app-env
     ports:
       - "127.0.0.1:18000:8000"

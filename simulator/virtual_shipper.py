@@ -3,7 +3,7 @@
 
 [위치]  전국에 무작위로 뿌리지 않는다. 물류 거점(서울/인천 · 평택항 · 대전 HUB · 부산항 · 울산 · 대구 · 광주)을
         중심으로 정규분포(가우스 노이즈, σ≈13km) 좌표를 만든다 → 거점 주변에 주문이 몰린다.
-        거점 좌표 · 비중은 backend/engines/matcher/spatial.py 의 HUBS · HUB_WEIGHTS 하나를 쓴다 (관제 지도와 같은 거점).
+        거점 좌표 · 비중은 backend/src/engines/matcher/spatial.py 의 HUBS · HUB_WEIGHTS 하나를 쓴다 (관제 지도와 같은 거점).
         만든 좌표는 '가장 가까운 등록 지역 주소'로 붙인다 (도로 경로 캐시가 주소 단위라서).
 [시간]  시간대별 포아송 도착률 λ(h) = 기본 콜 × 시간대 배율 (engines/pricing_engine.py HOUR_PROFILE)
         러시아워(08~09시 · 18~19시)에 콜이 폭증, 새벽엔 거의 없음. 콜 간격은 지수분포.
@@ -35,13 +35,14 @@ from datetime import datetime
 
 import requests
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
-from backend.engines.matcher.spatial import HUB_WEIGHTS, REGION_COORDS, REGION_LABELS, haversine_km  # noqa: E402
-from backend.engines.matcher.spatial import HUBS as MAP_HUBS  # noqa: E402
-from backend.engines.packer.trucks import TRUCKS  # noqa: E402
-from backend.engines.pricing_engine import HOUR_PROFILE, RUSH_HOURS, poisson  # noqa: E402
+# 거점 · 차종 · 시간대 수요는 백엔드 엔진 정의를 그대로 쓴다 (backend/src 의 표준 라이브러리 전용 모듈)
+BACKEND = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend")
+if BACKEND not in sys.path:
+    sys.path.insert(0, BACKEND)
+from src.engines.matcher.spatial import HUB_WEIGHTS, REGION_COORDS, REGION_LABELS, haversine_km  # noqa: E402
+from src.engines.matcher.spatial import HUBS as MAP_HUBS  # noqa: E402
+from src.engines.packer.trucks import TRUCKS  # noqa: E402
+from src.engines.pricing_engine import HOUR_PROFILE, RUSH_HOURS, poisson  # noqa: E402
 
 API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8000/api/v1")
 SHIPPER_EMAIL = os.getenv("SIM_SHIPPER_EMAIL", "logistics@samsung.com")   # core/seed.py 데모 화주
