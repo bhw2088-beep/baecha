@@ -11,7 +11,7 @@
                        ThreadPoolExecutor 로 GPS 핑을 초당 수백 건 보내 Redis Streams 가 유실 없이 처리하는지,
                        그동안 백엔드 · DB · Redis 의 CPU · 메모리가 어떻게 변하는지 측정
 
-실행 (수정본 폴더에서 · Docker Desktop 이 켜져 있어야 함 · 도커 이미지 baecha-app:dev 필요)
+실행 (저장소 최상위 폴더에서 · Docker Desktop 이 켜져 있어야 함 · 도커 이미지 baecha-backend:dev 필요)
     python scripts/simulator.py              # 번호 메뉴 (VS Code 에서 이 파일을 열고 ▷ 를 눌러도 같음)
     python scripts/simulator.py --mode 1     # 스모크 바로 실행
     python scripts/simulator.py --mode 2 --drivers 500 --orders 100 --rps 300 --gps-seconds 60
@@ -51,11 +51,11 @@ if hasattr(sys.stdout, "reconfigure"):    # 윈도우 콘솔에서 한글 · 기
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 # ======================================================================= 기본 설정
-ROOT = Path(__file__).resolve().parent.parent                 # 수정본 폴더
+ROOT = Path(__file__).resolve().parent.parent                 # 저장소 최상위 폴더
 RESULTS = Path(__file__).resolve().parent / "results"          # 결과 JSON 저장 폴더
 COMPOSE_FILE = Path(__file__).resolve().parent / "docker-compose.loadtest.yml"   # 테스트 전용 스택
 PROJECT = "baecha-load"                                        # 테스트 스택의 도커 프로젝트 이름
-IMAGE = "baecha-app:dev"                                       # 시연 스택이 빌드한 앱 이미지
+IMAGE = "baecha-backend:dev"                                       # 시연 스택이 빌드한 앱 이미지
 # 테스트 스택 API 주소 (이 PC 에서만). localhost 가 아니라 127.0.0.1 로 — 윈도우는 localhost 를 IPv6(::1) 로 먼저 시도하는데
 # 테스트 스택은 127.0.0.1 에만 열려 있어서, 새 연결마다 ::1 거절을 2초 기다린 뒤 127.0.0.1 로 붙는다 (지연 2초 튐의 원인)
 BASE_URL = "http://127.0.0.1:18000/api/v1"
@@ -166,7 +166,7 @@ def check_docker() -> bool:
         log("docker 명령을 찾을 수 없습니다. Docker Desktop 을 설치 · 실행하세요.")
         return False
     if docker("image", "inspect", IMAGE, timeout=30).returncode != 0:
-        log(f"도커 이미지 {IMAGE} 가 없습니다. 수정본 폴더에서 'docker compose up --build -d' 로 먼저 빌드하세요.")
+        log(f"도커 이미지 {IMAGE} 가 없습니다. 저장소 최상위 폴더에서 'docker compose up --build -d' 로 먼저 빌드하세요.")
         return False
     return True
 
@@ -297,13 +297,13 @@ def redis_stream_state() -> dict:
 # ======================================================================= 테스트 데이터 만들기
 def demo_password() -> str:
     """시드 데이터의 데모 계정 비밀번호 (backend/core/seed.py · 테스트 스택에서만 사용, 화면에 출력하지 않음)."""
-    src = (ROOT / "backend" / "core" / "seed.py").read_text(encoding="utf-8")
+    src = (ROOT / "backend" / "src" / "orm" / "seed.py").read_text(encoding="utf-8")
     return re.search(r'DEMO_PASSWORD\s*=\s*"([^"]+)"', src).group(1)
 
 
 def seed_driver_emails() -> list[str]:
     """시드 데이터에 들어 있는 데모 기사 계정 (이 기사들도 제안을 받을 수 있어서 함께 로그인해 둔다)."""
-    src = (ROOT / "backend" / "core" / "seed.py").read_text(encoding="utf-8")
+    src = (ROOT / "backend" / "src" / "orm" / "seed.py").read_text(encoding="utf-8")
     return re.findall(r'"email":\s*"([^"]+)",\s*"role":\s*"driver"', src)
 
 

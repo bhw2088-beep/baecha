@@ -1,0 +1,9 @@
+# frontend 이미지에 넣지 않을 것
+.env
+.env.*
+**/__pycache__/
+**/*.pyc
+Dockerfile
+.dockerignore
+# 모바일 웹은 백엔드 이미지가 /m 으로 서비스한다
+mobile/

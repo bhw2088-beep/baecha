@@ -11,10 +11,10 @@ __pycache__/
 docs/internal/
 
 # 인수증 사진 (운영 데이터)
-backend/data/pod_photos/
+backend/src/data/pod_photos/
 
 # 스트레스 테스트 실행 로그 (결과 JSON · CSV · summary.md 는 커밋)
-stress_8k/results/logs/
+backend/tests/stress_tests/results/logs/
 
 # 에디터 (8,000+ 스트레스 테스트 실행 목록 launch.json 만 공유)
 .vscode/*
