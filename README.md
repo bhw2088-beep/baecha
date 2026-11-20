@@ -121,9 +121,9 @@ baecha/
 │   │   ├── utils/             # 공용 — errors · security · redis_client · perf
 │   │   └── data/              # route_cache.json(도로 경로 990개) · ml_ranker.txt/.json(학습된 모델) · KPI 기준값
 │   └── tests/
-│       ├── test_suites.py     # pytest 진입점 (아래 점검 스크립트를 모듈로 실행)
-│       ├── packing_test/ · matching_test/ · fsm_test/ · compliance_test/ · pricing_test/ · tracking_test/
-│       ├── smoke_test/        # 실행 중인 API 전체 흐름
+│       ├── conftest.py        # 공통 fixture (store: 시드 저장소 복사본)
+│       ├── unit_tests/        # 단위 테스트 — engines/ · services/ · orm/ · utils/ (test_ctor · _smoke · _actual)
+│       ├── e2e_tests/         # API 전체 흐름 (프로세스 안 TestClient 또는 E2E_API_BASE 서버)
 │       └── stress_tests/      # 마이크로 배치 · 적재 스트레스 + 8,000건 대량 테스트(1_kpi_8k.py ~ 5_packing_stress.py) · results/
 ├── frontend/                  # 웹 화면 (Streamlit)
 │   ├── Dockerfile · requirements.txt · .streamlit/config.toml
@@ -172,10 +172,18 @@ CI 는 `main` · `staging` push 와 모든 PR 에서 실행. 자세한 규칙 ·
 ```bash
 cd backend
 pip install -r requirements-dev.txt
-python -m pytest                                  # 전체 (서버가 없으면 smoke_test 는 건너뜀)
-python -m tests.fsm_test.test_fsm                 # 점검 스크립트 하나만
+python -m pytest -q                               # 전부: 단위 + e2e + 빠른 스트레스 (서버 · DB · Redis 없이)
+python -m pytest tests/unit_tests -q              # 단위 테스트만 (가장 빠름)
+E2E_API_BASE=http://localhost:8000/api/v1 python -m pytest tests/e2e_tests   # 도커로 띄운 서버에 e2e
 ```
-점검 스크립트는 실제 DB 를 쓰지 않습니다(메모리 저장소). `tests/smoke_test` 는 실행 중인 서버에 API 로 한 바퀴 돕니다.
+
+| 폴더 | 내용 | 이름 규칙 |
+|---|---|---|
+| `tests/unit_tests/` | 함수 · 클래스 하나씩 (엔진 · 서비스 · 저장소 · 공용 함수) | `test_ctor_*` 생성자 · 기본값 / `test_<대상>_smoke` 입력→출력 형태 / `test_<대상>_actual_*` 실제 규칙 · 경계값 |
+| `tests/e2e_tests/` | 등록 → 매칭 → 운행 → 인수증 → 청구 → 결제 → 리뷰 · 권한 · 관제 API | 흐름 순서대로 |
+| `tests/stress_tests/` | 마이크로 배치 · 적재 스트레스 (빠른 버전만 pytest) | `test_stress_quick_*` |
+
+테스트는 실제 DB 를 쓰지 않습니다(메모리 저장소). 단위 테스트는 엔진 규칙을 일부러 틀리게 바꾸면 바로 실패하는지까지 확인했습니다.
 
 ## 저장 방식
 메모리 저장소(Store)를 작업 사본으로 쓰고, 요청이 끝날 때마다 **바뀐 행만 PostgreSQL 에 UPSERT** 합니다.

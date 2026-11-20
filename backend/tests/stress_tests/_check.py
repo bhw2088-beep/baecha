@@ -1,12 +1,12 @@
-"""테스트 스크립트 공용: 간단한 PASS/FAIL 집계 (pytest 없이 실행).
+"""스트레스 스크립트 공용: 간단한 PASS/FAIL 집계 (pytest 없이 단독 실행하는 stress_test.py · packing_stress.py 용).
 
-점검 스크립트는 backend 폴더에서 모듈로 실행한다:  python -m tests.fsm_test.test_fsm
+backend 폴더에서 모듈로 실행한다:  python -m tests.stress_tests.stress_test --quick
 """
 
 import os
 import sys
 
-BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))   # backend 폴더 → src 패키지
+BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))   # backend 폴더 → src 패키지
 REPO = os.path.dirname(BACKEND)                                             # 저장소 최상위 → simulator 패키지
 for _p in (BACKEND, REPO):
     if _p not in sys.path:

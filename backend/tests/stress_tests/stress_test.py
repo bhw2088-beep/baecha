@@ -42,7 +42,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 
-from tests._check import check, finish, section
+from tests.stress_tests._check import check, finish, section
 
 BACKEND = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend 폴더
 REPO = os.path.dirname(BACKEND)                                                         # 저장소 최상위 (simulator)

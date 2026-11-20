@@ -22,7 +22,10 @@ backend/            백엔드 서버 코드만 (FastAPI · Celery)
     workers/        Celery 작업 · GPS 스트림 워커
     utils/          공용 함수 (errors · security · redis_client · perf)
     data/           학습된 모델 · 도로 경로 캐시 · KPI 기준값
-  tests/            <기능>_test/ 폴더별 점검 스크립트 · smoke_test/ · stress_tests/
+  tests/
+    unit_tests/     단위 테스트 (src 구조를 따라 engines/ · services/ · orm/ · utils/)
+    e2e_tests/      API 전체 흐름 (기본 프로세스 안 TestClient · E2E_API_BASE 면 실행 중인 서버)
+    stress_tests/   빠른 스트레스(pytest) + 8,000건 이상 대량 실행 파일
   Dockerfile        API · 워커 공용 이미지 (빌드 컨텍스트: 저장소 최상위)
 frontend/           웹 화면 (Streamlit)
   app/
@@ -59,13 +62,21 @@ docker compose up --build -d        # db · redis · backend · worker · simula
 ```bash
 cd backend
 pip install -r requirements-dev.txt
-python -m pytest -q                         # 서버 없이 도는 점검 전체 (smoke_test 는 서버가 없으면 건너뜀)
-python -m tests.fsm_test.test_fsm           # 점검 스크립트 하나만
+python -m pytest -q                         # 전부 (단위 + e2e(프로세스 안) + 빠른 스트레스 · 약 1분)
+python -m pytest tests/unit_tests -q        # 단위 테스트만 (약 25초) — 코드 고칠 때마다
+python -m pytest -m "not stress" -q         # 스트레스 제외
+python -m pytest tests/unit_tests/engines/test_packer.py -k actual   # 파일 하나 · 이름으로 고르기
 cd ..
 python -m pyflakes backend/src backend/tests frontend/app frontend/scripts simulator scripts
 ```
 - 점검 스크립트는 `BAECHA_DB=0` 메모리 저장소를 쓴다. 실제 DB · 외부 API(국세청 · Gemini)를 부르지 않는다.
-- 새 점검 스크립트는 `backend/tests/<기능>_test/test_<기능>.py` 로 만들고 `tests/test_suites.py` 목록에 모듈 이름을 추가한다.
+- 테스트는 pytest 함수로 쓴다. 단위 테스트는 `tests/unit_tests/<src 의 폴더>/test_<모듈>.py` 에 두고 이름을 이렇게 붙인다:
+  - `test_ctor_*` — 생성자 · 기본값 · 상수 표가 의도대로인가
+  - `test_<대상>_smoke` — 정상 입력에 오류 없이 기대한 형태(키 · 타입 · 범위)가 나오는가
+  - `test_<대상>_actual_*` — 실제 규칙 · 경계값 · 실패 케이스 (숫자 · 문구까지 구체적으로 단언)
+- 기능을 바꾸거나 고칠 때는 먼저 실패하는 `actual` 테스트를 쓰고(TDD), 고친 뒤 통과를 확인한다.
+- 저장소(Store)가 필요하면 `store` fixture 를 쓴다 (시드 복사본 · 테스트끼리 영향 없음). 실제 DB · Redis 는 쓰지 않는다.
+- e2e 는 `tests/e2e_tests/` — 기본은 프로세스 안 TestClient, `E2E_API_BASE=http://localhost:8000/api/v1` 이면 실행 중인 서버.
 - Windows 에서 pip 가 requirements 의 한글 주석을 못 읽으면 `PYTHONUTF8=1` 을 켠다.
 
 ## 작업 규칙

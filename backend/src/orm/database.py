@@ -536,5 +536,5 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, Tra
         return fleet
 
 
-# 서버용 저장소. 테스트는 BAECHA_DB=0 으로 DB 를 쓰지 않는다 (tests/_check.py).
+# 서버용 저장소. 테스트는 BAECHA_DB=0 으로 DB 를 쓰지 않는다 (tests/conftest.py).
 store = Store(persistent=os.getenv("BAECHA_DB", "1") != "0")

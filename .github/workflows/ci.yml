@@ -30,7 +30,7 @@ jobs:
           pip install -r backend/requirements-dev.txt
       - name: 문법 · 미사용 import 검사 (pyflakes)
         run: python -m pyflakes backend/src backend/tests frontend/app frontend/scripts simulator scripts
-      - name: 점검 스크립트 (서버 없이)
+      - name: 단위 · e2e(프로세스 안) · 빠른 스트레스 테스트 (서버 없이)
         working-directory: backend
         env:
           BAECHA_DB: "0"
@@ -56,9 +56,11 @@ jobs:
           curl -sf http://localhost:8000/api/v1/health
       - name: API 전체 흐름 점검 (등록 → 매칭 → 운행 → 청구 → 모의 결제 · Celery · 핑 · 리뷰 · 해시 체인)
         working-directory: backend
+        env:
+          E2E_API_BASE: http://localhost:8000/api/v1   # e2e 를 실행 중인 도커 스택에 HTTP 로 (Celery 비동기 적재 포함)
         run: |
-          pip install requests
-          python -m tests.smoke_test.smoke_test http://localhost:8000/api/v1
+          pip install pytest requests
+          python -m pytest tests/e2e_tests -q
       - name: 운영용 compose 파일 문법 검사
         run: docker compose -f docker-compose.prod.yml config -q
       - name: 실패 시 로그
