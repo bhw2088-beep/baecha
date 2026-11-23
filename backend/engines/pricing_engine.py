@@ -59,7 +59,7 @@ def mock_get_weather_condition(region: str, at: datetime | None = None) -> dict:
     dist = weather_distribution(at.month)
     r = _rng("weather", region, at.strftime("%Y%m%d%H")).random()
     acc, code = 0.0, "CLEAR"
-    for code, p in dist.items():
+    for code, p in dist.items():  # noqa: B007 — 반복이 끝난(break) 뒤의 code 를 쓴다
         acc += p
         if r < acc:
             break

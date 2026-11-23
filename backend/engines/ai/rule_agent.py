@@ -282,7 +282,8 @@ def incident_report(store, anomaly_id: str) -> dict:
 # ------------------------------------------------------------------ 자연어 명령 (규칙 · Gemini 대체)
 # ------------------------------------------------------------------ AI 관제 실장 (조회 · 요약 전용)
 REGION_RE = r"([가-힣]{2,}(?:구|시|군|동|읍|면|항))"
-CHANGE_VERBS = ("바꿔", "변경", "올려", "내려", "낮춰", "높여", "조정", "적용", "설정해", "늘려", "줄여")
+CHANGE_VERBS = ("바꿔", "변경", "올려", "내려", "낮춰", "높여", "조정", "적용", "설정해", "늘려", "줄여",
+                "재매칭해", "배정해", "지급해", "실행해", "시켜")
 CHANGE_TARGETS = ("임계", "반경", "가중", "제한시간", "타임아웃", "설정", "운임", "인센티브", "보조금", "재매칭", "배정")
 
 
@@ -383,6 +384,12 @@ def _quick_answer(store, t: str) -> dict | None:
     r = lambda ans, data=None: {"engine": "rule-based", "answer": ans, "data": data}  # noqa: E731
     if len(t) <= 12 and any(k in low for k in ("안녕", "하이", "hello", "hi", "반가", "누구")):
         return r("안녕하세요, AI 관제 실장입니다. 관제 현황을 조회 · 요약해 드려요. 예: " + " · ".join(f"'{q}'" for q in EXAMPLES[:4]))
+    if any(k in t for k in ("반경", "제한시간", "타임아웃", "매칭 설정", "가중치")) and \
+            any(k in t for k in ("몇", "얼마", "현재", "지금")) and not any(k in t for k in ("가이드", "튜닝", "추천")):
+        v = store.settings_view()
+        return r(f"현재 자동 매칭 설정: 탐색 반경 {v['radius_km']}km · 수락 제한시간 {v['timeout_sec']}초 · "
+                 f"점수 {v['formula']} · AI 수락 예측 임계값 {v['ml_threshold']:.2f}. "
+                 "변경은 '매칭 분석' 화면의 [자동 매칭 설정]에서 합니다.", {k: v[k] for k in ("radius_km", "timeout_sec", "w_dist")})
     if "kpi" in low or "지표" in t or "성과" in t:
         k = store.kpi_scorecard()
         rows = [f"{x['name']} {x['display']}({x['status_label']})" for x in k["rows"] if x["status"] != "none"]

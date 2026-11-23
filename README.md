@@ -45,7 +45,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 | 명세 | [컬럼명_리스트.md](docs/명세/컬럼명_리스트.md) | DB 테이블 · API 응답 필드 |
 | 설명 | [주요코드_설명.md](docs/설명/주요코드_설명.md) | 적재 · 매칭 · 관제 핵심 코드 |
 | 설명 | [벤치마킹_보고서.md](docs/설명/벤치마킹_보고서.md) | 아키텍처 · KPI 측정값 · 한계 |
-| 테스트 결과 | [stress_8k/README.md](stress_8k/README.md) | 8,008건 스트레스 테스트 실행 · 결과 |
+| 테스트 결과 | [tests/stress/stress_8k/README.md](tests/stress/stress_8k/README.md) | 8,008건 스트레스 테스트 실행 · 결과 |
 
 ---
 
@@ -88,7 +88,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 | 3 | GPS 핑 API · 재위탁 방지 · Shapely 이탈 3회 디바운싱 · 지연 감지 · 해시 체인 | `engines/tracking_engine.py`, `services/tracking_service.py`, `models/audit.py` |
 | 4 | 상호 리뷰(별점 · 태그) · 자동/수동 블랙리스트 | `services/review_service.py`, `models/review.py` |
 | 5 | Gemini Function Calling 관제 (키 없으면 규칙) · 인시던트 리포트 · 조절 가이드 | `engines/ai/gemini_agent.py`, `engines/ai/rule_agent.py` |
-| 6 | 마이크로 배치 스트레스 · GPS 오탐 검증 | `tests/stress_test.py` |
+| 6 | 마이크로 배치 스트레스 · GPS 오탐 검증 | `tests/stress/stress_test.py` |
 | 8 | 벤치마킹 보고서 | `docs/설명/벤치마킹_보고서.md` |
 
 ---

@@ -10,9 +10,9 @@
   - 위반 화물 (--bad-rate): 과적 · 편심 · 상부 하중 초과 · 적층 불가 위 적재 · 냉장 화물 상온차 · 적재함보다 큰 화물
     → 화주가 고른 차종으로 적재 → 등록 단계에서 막히는지 (차단률)
 
-실행 (수정본 폴더 · 보통은 stress_8k/5_packing_stress.py 가 도커로 실행)
-    python tests/packing_stress.py --cases 10000 --margins 0 0.05 0.1 0.15 --errors=-5:5,-5:10,-15:15 --bad-rate 0.15
-결과: --out JSON (stress_8k/_packing.py 가 표로 정리)
+실행 (수정본 폴더 · 보통은 tests/stress/stress_8k/5_packing_stress.py 가 도커로 실행)
+    python tests/stress/packing_stress.py --cases 10000 --margins 0 0.05 0.1 0.15 --errors=-5:5,-5:10,-15:15 --bad-rate 0.15
+결과: --out JSON (tests/stress/stress_8k/_packing.py 가 표로 정리)
       10,000건 이상 · 시드 7 기준 실행이면 backend/data/benchmark_packing.json 사본도 저장 → 관제 GET /admin/kpi 의 적재 · 과적 행
 """
 
@@ -27,7 +27,7 @@ import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # 수정본
 sys.path.insert(0, ROOT)
 
 from backend.config import settings  # noqa: E402
@@ -255,7 +255,7 @@ def main() -> int:
     ap.add_argument("--errors", default="-5:5,-5:10,-15:15", help="신고 대비 실제 무게 오차 범위들 (%%) 예: --errors=-5:5,-5:10")
     ap.add_argument("--bad-rate", type=float, default=0.15)
     ap.add_argument("--workers", type=int, default=0, help="동시 프로세스 수 (0 = CPU 수)")
-    ap.add_argument("--out", default="stress_8k/results/packing/packing_stress.json")
+    ap.add_argument("--out", default="tests/stress/stress_8k/results/packing/packing_stress.json")
     a = ap.parse_args()
     errors = [tuple(float(v) for v in e.split(":")) for e in a.errors.split(",") if e.strip()]
     margins = list(dict.fromkeys(round(m, 4) for m in a.margins))

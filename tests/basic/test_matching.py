@@ -8,7 +8,7 @@
 - 관제 매칭 설정 변경 즉시 적용 · AI 적정 운임 (중량 할증)
 """
 
-from _check import check, finish, section
+from _common import check, finish, section
 
 from backend.engines.matcher import spatial as geo
 from backend.services import billing_service as pricing

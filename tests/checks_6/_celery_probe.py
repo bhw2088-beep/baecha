@@ -1,5 +1,5 @@
 """
-Redis 장애 복구 테스트 전용 Celery 작업 (tests/redis_recovery_test.py 가 테스트 워커에만 -I 로 불러온다).
+Redis 장애 복구 테스트 전용 Celery 작업 (tests/checks_6/2_redis_recovery.py 가 테스트 워커에만 -I 로 불러온다).
 운영 워커(docker compose 의 worker)는 이 파일을 불러오지 않는다.
 """
 

@@ -1,6 +1,6 @@
 """
 적재 물리 안전 규칙 점검 — 규칙 R0~R10 하나씩 '일부러 어긴 화물'을 넣어 막히는지 (서버 없이 · 몇 초)
-    실행: 수정본 폴더에서  python tests/test_packing_rules.py   (pytest 가 tests/test_suites.py 로 함께 실행)
+    실행: 수정본 폴더에서  python tests/checks_6/3_packing_rules.py   (pytest 가 tests/test_suites.py 로 함께 실행)
 
 test_packing.py 는 '정상 화물이 잘 실리는지'를 본다. 이 파일은 반대로 '위반 화물이 막히는지'와 경계값을 본다.
 
@@ -12,7 +12,7 @@ B. 검증기 (결과 좌표만 보고 다시 채점) — 손으로 만든 잘못
    엔진이 위반 배치를 만들지 않으므로, 검증기가 정말 위반을 잡는지는 이렇게 따로 확인해야 한다
 """
 
-from _check import check, finish, section
+from _common import check, finish, section
 
 from backend.engines.packer.engine import Options
 from backend.engines.packer.models import ItemSpec

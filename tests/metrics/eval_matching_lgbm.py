@@ -4,7 +4,7 @@
 VS Code: 이 파일을 열고 오른쪽 위 ▷ (Run Python File) 를 누르면 바로 실행되고, 끝나면 터미널에 지표 표가 나온다.
   - 이 PC 에 lightgbm · numpy 가 없으면 도커 이미지(baecha-app:dev)에서 자동으로 다시 실행 → Docker Desktop 필요
   - 실행이 성공하면 결과 표가 이 파일 맨 아래 ''' ''' 블록에 자동으로 저장된다 (문자열이라 실행되지 않음)
-터미널: 수정본 폴더에서  PYTHONPATH=. python tests/eval_matching_lgbm.py
+터미널: 수정본 폴더에서  PYTHONPATH=. python tests/metrics/eval_matching_lgbm.py
 
 기존 코드 보호
   - backend/ 코드와 test_*.py 는 수정하지 않는다. backend/engines/matcher/ml_ranker.py 의 함수를 불러다 쓰기만 한다.
@@ -27,7 +27,7 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]   # 수정본
 IMAGE = "baecha-app:dev"
 THRESHOLD = 0.75                              # ml_ranker 자동 제안 임계값 (보수적)
 SWEEP = [0.5, 0.6, 0.7, 0.75, 0.8, 0.9]       # 임계값별 비교
@@ -303,7 +303,7 @@ def run_in_docker() -> int:
     print(f"이 PC 에 lightgbm 이 없어 도커 이미지({IMAGE})에서 실행합니다...")
     cmd = ["docker", "run", "--rm", "--network", "none", "-e", "PYTHONPATH=/src", "-e", "BAECHA_DB=0",
            "-e", "PYTHONIOENCODING=utf-8", "-v", f"{ROOT.as_posix()}:/src", "-w", "/src",
-           IMAGE, "python", "tests/eval_matching_lgbm.py", "--print-only"]
+           IMAGE, "python", "tests/metrics/eval_matching_lgbm.py", "--print-only"]
     env = {**os.environ, "MSYS_NO_PATHCONV": "1"}
     r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
     if r.returncode != 0:

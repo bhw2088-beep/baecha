@@ -1,5 +1,5 @@
 """
-실시간 추적 · 감사 로그 해시 체인 · 리뷰 점검 (서버 없이).   실행: 수정본 폴더에서  python tests/test_tracking.py
+실시간 추적 · 감사 로그 해시 체인 · 리뷰 점검 (서버 없이).   실행: 수정본 폴더에서  python tests/basic/test_tracking.py
 
 - 경로 거리 계산(Shapely 또는 순수 파이썬) · 디바운싱(정확히 3번째 경고, 복귀 시 초기화)
 - 핑 처리: 지터는 정상, 단발 튐은 무시, 연속 이탈 → 이상 감지 + 감사 로그, 배정 기사가 아닌 단말 → 재위탁 의심
@@ -11,7 +11,7 @@
 import random
 from datetime import datetime, timedelta
 
-from _check import check, finish, section
+from _common import check, finish, section
 
 from backend.config import settings
 from backend.core.database import Store

@@ -2,3 +2,6 @@
 -r requirements.txt
 pytest>=8.3
 pyflakes>=3.2
+ruff==0.17.6        # 버그 · 보안 규칙 (설정: ruff.toml) · 규칙이 버전마다 바뀌어 고정
+bandit>=1.9         # 보안 정적 분석 (중간 이상만 실패)
+pip-audit>=2.10     # 라이브러리 알려진 취약점 (requirements.txt)

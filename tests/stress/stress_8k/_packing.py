@@ -1,14 +1,14 @@
 """
-적재 전용 대량 스트레스 테스트 실행 · 표 정리 (계산 본체: tests/packing_stress.py · 도커 이미지에서 실행).
+적재 전용 대량 스트레스 테스트 실행 · 표 정리 (계산 본체: tests/stress/packing_stress.py · 도커 이미지에서 실행).
 
 직접 실행하지 않고 5_packing_stress.py · 4_show_results.py 가 불러 쓴다. 옵션을 직접 주려면 (수정본 폴더에서)
-    python stress_8k/5_packing_stress.py --cases 30000                 # 건수 늘리기
-    python stress_8k/5_packing_stress.py --margins 0 0.1               # 상부 허용하중 여유값
-    python stress_8k/5_packing_stress.py --errors=-5:5,-10:20          # 신고 대비 실제 무게 오차 범위들 (%) — '=' 붙여서
-    python stress_8k/5_packing_stress.py --bad-rate 0.3                # 위반 화물 비율
-    python stress_8k/5_packing_stress.py --quick                       # 빠른 확인 (500건)
+    python tests/stress/stress_8k/5_packing_stress.py --cases 30000                 # 건수 늘리기
+    python tests/stress/stress_8k/5_packing_stress.py --margins 0 0.1               # 상부 허용하중 여유값
+    python tests/stress/stress_8k/5_packing_stress.py --errors=-5:5,-10:20          # 신고 대비 실제 무게 오차 범위들 (%) — '=' 붙여서
+    python tests/stress/stress_8k/5_packing_stress.py --bad-rate 0.3                # 위반 화물 비율
+    python tests/stress/stress_8k/5_packing_stress.py --quick                       # 빠른 확인 (500건)
 
-결과 (stress_8k/results/)
+결과 (tests/stress/stress_8k/results/)
     packing/packing_stress.json · packing/summary.md     원본 집계 · 표
     logs/packing_stress.log                              실행 로그 (커밋 안 함)
 """
@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
+ROOT = HERE.parents[2]
 OUT = HERE / "results" / "packing" / "packing_stress.json"
 LOGS = HERE / "results" / "logs"
 IMAGE = "baecha-app:dev"
@@ -91,7 +91,7 @@ def show() -> int:
     try:
         d = json.loads(OUT.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        print("결과가 없습니다. 먼저 stress_8k/5_packing_stress.py 를 실행하세요.")
+        print("결과가 없습니다. 먼저 tests/stress/stress_8k/5_packing_stress.py 를 실행하세요.")
         return 1
     lines = table(d)
     LAST_TEXT = "## 적재 전용 대량 스트레스 테스트\n\n" + "\n".join(lines)
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     if not a.local and not check_docker():
         return 1
     cases = 500 if a.quick else a.cases
-    args = ["tests/packing_stress.py", "--cases", str(cases), "--seed", str(a.seed), "--margins", *map(str, a.margins),
+    args = ["tests/stress/packing_stress.py", "--cases", str(cases), "--seed", str(a.seed), "--margins", *map(str, a.margins),
             f"--errors={a.errors}", "--bad-rate", str(a.bad_rate), "--workers", str(a.workers),
             "--out", OUT.relative_to(ROOT).as_posix()]
     if a.local:

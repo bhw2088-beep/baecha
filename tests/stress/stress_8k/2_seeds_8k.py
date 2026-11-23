@@ -4,7 +4,7 @@
 VS Code: 이 파일을 열고 오른쪽 위 ▷ (Run Python File) 를 누르면 바로 실행되고, 끝나면 시드별 비교표가 나온다.
   - 시드 7(KPI 기준)은 ① 1_kpi_8k.py 결과를 그대로 표에 넣는다 (여기서 다시 돌리지 않음)
   - 결과: results/seeds/seed<N>.json · results/seeds/summary.md
-  - PC 가 느리면 동시 실행 수를 줄여서: python stress_8k/2_seeds_8k.py --parallel 2
+  - PC 가 느리면 동시 실행 수를 줄여서: python tests/stress/stress_8k/2_seeds_8k.py --parallel 2
   - 실행이 성공하면 결과 표가 이 파일 맨 아래 ''' ''' 블록에 자동으로 저장된다 (문자열이라 실행되지 않음)
 """
 

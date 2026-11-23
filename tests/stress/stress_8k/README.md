@@ -1,4 +1,4 @@
-# stress_8k — 주문 8,000건 이상 스트레스 테스트 모음
+# tests/stress/stress_8k — 주문 8,000건 이상 스트레스 테스트 모음
 
 매칭 · 적재 KPI를 **주문 8,008건(하루 1,001건 × 8일 · 가상 기사 400명)** 으로 측정하는 실행 파일과 결과를 한 폴더에 모았습니다.
 실제 DB · 서버는 건드리지 않고, 계산은 도커 이미지(`baecha-app:dev`) 안에서 합니다.
@@ -19,7 +19,7 @@
 | [`5_packing_stress.py`](5_packing_stress.py) | **과적 · 적재 대량 테스트** — 매칭 없이 적재 엔진만 무작위 화물 10,000건 (위반 화물 15% · 6종) → 입력 오차 ±5 · −5~+10 · ±15% × 상부 허용하중 여유 0 · 5 · 10 · 15% 별 현실 위험률 · 적재율 · 차단률 | 약 30분 (`--cases 3000` 이면 약 9분) |
 
 > 왼쪽 **실행 및 디버그(Ctrl+Shift+D)** 목록에서 `8k ① KPI 측정` 등을 골라 ▷ 를 눌러도 같습니다 (`.vscode/launch.json`).
-> 터미널에서: `python stress_8k/1_kpi_8k.py` (수정본 폴더에서). 옵션은 각 파일 맨 위 설명 참고 (`--quick`, `--parallel` 등).
+> 터미널에서: `python tests/stress/stress_8k/1_kpi_8k.py` (수정본 폴더에서). 옵션은 각 파일 맨 위 설명 참고 (`--quick`, `--parallel` 등).
 
 **▷ 를 눌렀는데 `did not find executable ... python.exe` 같은 오류가 나면** — 수정본의 `.venv` 가 지워진 파이썬을 가리키는 상태입니다.
 `Ctrl+Shift+P` → **Python: Select Interpreter** → 설치된 **Python 3.12 (Global)** 을 고르세요. 이 실행 파일들은 표준 라이브러리만 써서 패키지 설치가 필요 없습니다.
@@ -38,7 +38,7 @@
 
 > ⑤ 는 8,008건 매칭 시뮬레이션과 별개입니다. 8,008건 실행의 적재 검증(2,200건)은 샘플 화물 3종만 반복하므로,
 > 과적 · 적재 규칙은 ⑤ 에서 무작위 화물(팔레트 · 박스 · 드럼 · 장비 · 장척물 / 냉동 · 파손주의 · 적층 불가 · 다중 하차)로 따로 검증합니다.
-> 계산 본체: [`tests/packing_stress.py`](../tests/packing_stress.py).
+> 계산 본체: [`tests/stress/packing_stress.py`](../tests/stress/packing_stress.py).
 
 ## 측정 조건
 
@@ -47,5 +47,5 @@
 - 입력 오차: 품목마다 신고 무게 대비 실제 −5 ~ +10% → 배차된 적재 계획을 실제 무게로 다시 검증
 - 같은 시드면 실행 시각과 상관없이 같은 결과 (시뮬레이션 시계) — 배차 지연(초)만 PC 성능에 따라 다름
 
-시뮬레이션 본체는 [`tests/stress_test.py`](../tests/stress_test.py) 이고, 여기 파일들은 실행 · 진행 표시 · 표 정리만 합니다
+시뮬레이션 본체는 [`tests/stress/stress_test.py`](../tests/stress/stress_test.py) 이고, 여기 파일들은 실행 · 진행 표시 · 표 정리만 합니다
 ([`_kpi.py`](_kpi.py) · [`_margin.py`](_margin.py) 가 공통 코드).

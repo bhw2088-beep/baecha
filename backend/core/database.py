@@ -201,8 +201,8 @@ class DbSync:
                     for r in rows:
                         key = r[pk]
                         alive.add(key)
-                        h = hashlib.md5(json.dumps(r, sort_keys=True, default=str, ensure_ascii=False)
-                                        .encode()).hexdigest()
+                        h = hashlib.md5(json.dumps(r, sort_keys=True, default=str, ensure_ascii=False)   # 변경 감지용 (보안 아님)
+                                        .encode(), usedforsecurity=False).hexdigest()
                         if self.hashes.get((table, key)) != h:
                             changed.append(r)
                             self.hashes[(table, key)] = h

@@ -27,7 +27,7 @@ docker-compose*.yml
 # 문서 · 보고서 · 산출물 (서버 실행에 필요 없음)
 *.md
 docs/
-stress_8k/
+tests/stress/stress_8k/
 *.zip
 
 # 운영 데이터 (볼륨으로만 보관)

@@ -10,11 +10,11 @@
 KPI 기준 파일(results/benchmark_large.json · backend/data/*)은 건드리지 않는다 — 결과는 results/margin_compare/ 에만 저장.
 
 직접 실행하지 않고 3_margin_compare.py · 4_show_results.py 가 불러 쓴다. 옵션을 직접 주려면 (수정본 폴더에서)
-    python stress_8k/3_margin_compare.py --parallel         # 두 개 동시에 (약 8~10분, 지연 P95 는 순차 실행 쪽이 정확)
-    python stress_8k/3_margin_compare.py --margins 0 0.05 0.10 0.15   # 여유값 여러 개
-    python stress_8k/3_margin_compare.py --quick            # 빠른 확인 (하루 1,001건 · 약 1~2분)
+    python tests/stress/stress_8k/3_margin_compare.py --parallel         # 두 개 동시에 (약 8~10분, 지연 P95 는 순차 실행 쪽이 정확)
+    python tests/stress/stress_8k/3_margin_compare.py --margins 0 0.05 0.10 0.15   # 여유값 여러 개
+    python tests/stress/stress_8k/3_margin_compare.py --quick            # 빠른 확인 (하루 1,001건 · 약 1~2분)
 
-결과 (stress_8k/results/)
+결과 (tests/stress/stress_8k/results/)
     margin_compare/margin_<NN>.json      여유값별 원본 결과
     margin_compare/summary.md            비교표 (보고서에 붙여 넣기용)
     logs/margin_<NN>.log                 실행 로그 (커밋 안 함)
@@ -31,8 +31,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent                # stress_8k 폴더
-ROOT = HERE.parent                                      # 수정본 폴더 (도커에 /src 로 연결)
+HERE = Path(__file__).resolve().parent                # tests/stress/stress_8k 폴더
+ROOT = HERE.parents[2]                                      # 수정본 폴더 (도커에 /src 로 연결)
 OUT_DIR = HERE / "results" / "margin_compare"
 LOGS = HERE / "results" / "logs"
 IMAGE = "baecha-app:dev"
@@ -56,7 +56,7 @@ def _out(m: float) -> Path:
 def _command(m: float, a, single_thread: bool) -> list[str]:
     days, orders, drivers = (1, 1001, 400) if a.quick else (a.days, a.orders, a.drivers)
     out = _out(m).relative_to(ROOT).as_posix()
-    args = ["tests/stress_test.py", "--seed", str(a.seed), "--days", str(days), "--orders", str(orders),
+    args = ["tests/stress/stress_test.py", "--seed", str(a.seed), "--days", str(days), "--orders", str(orders),
             "--drivers", str(drivers), "--batch", "8", "--target", str(days * orders), "--max-minutes", "60",
             "--expire-hours", "3", "--detail", "--out", out]
     if a.local:
@@ -190,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
 
     lines = table(margins)
     if not lines:
-        print("결과가 없습니다. 먼저 stress_8k/3_margin_compare.py 를 실행하세요.")
+        print("결과가 없습니다. 먼저 tests/stress/stress_8k/3_margin_compare.py 를 실행하세요.")
         return 1
     global LAST_TEXT
     LAST_TEXT = "## 상부 허용하중 안전 여유 전후 비교\n\n" + "\n".join(lines)

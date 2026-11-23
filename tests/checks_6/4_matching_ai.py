@@ -1,8 +1,8 @@
 """
 매칭 AI (LightGBM 기사 수락 예측) 점검 — 랜덤 시드 비교 · 임계값 · 재현성 · 단조 제약 · 매칭 연동 (서버 없이 · 약 10초)
-    실행: 수정본 폴더에서  python tests/test_matching_ai.py   (pytest 가 tests/test_suites.py 로 함께 실행)
+    실행: 수정본 폴더에서  python tests/checks_6/4_matching_ai.py   (pytest 가 tests/test_suites.py 로 함께 실행)
 
-tests/eval_matching_lgbm.py 는 발표용 수치(시드 2026 한 번)를 뽑는다. 이 파일은 그 수치가 '우연히 잘 나온 한 번'이
+tests/metrics/eval_matching_lgbm.py 는 발표용 수치(시드 2026 한 번)를 뽑는다. 이 파일은 그 수치가 '우연히 잘 나온 한 번'이
 아닌지(시드를 바꿔도 비슷한지), 임계값 0.75 가 시드와 상관없이 KPI 를 지키는지, 실제 매칭이 임계값을 지키는지 본다.
 
 1. 랜덤 시드 5개 (가상 데이터 · 모델 시드를 함께 바꿔 매번 새로 학습)
@@ -19,7 +19,7 @@ tests/eval_matching_lgbm.py 는 발표용 수치(시드 2026 한 번)를 뽑는�
 
 from statistics import mean, pstdev
 
-from _check import check, finish, section
+from _common import check, finish, section
 
 import numpy as np
 

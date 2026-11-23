@@ -1,5 +1,5 @@
 {
-    // 실행 및 디버그(Ctrl+Shift+D) 목록 — 8,000+ 스트레스 테스트 (stress_8k/README.md)
+    // 실행 및 디버그(Ctrl+Shift+D) 목록 — 8,000+ 스트레스 테스트 (tests/stress/stress_8k/README.md)
     "version": "0.2.0",
     "configurations": [
         {
@@ -45,7 +45,7 @@
             "name": "8k ① KPI 측정 (시드 7 · 약 6~8분)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/stress_8k/1_kpi_8k.py",
+            "program": "${workspaceFolder}/tests/stress/stress_8k/1_kpi_8k.py",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": true
@@ -54,7 +54,7 @@
             "name": "8k ② 시드별 비교 (7개 시드 · 약 20~30분)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/stress_8k/2_seeds_8k.py",
+            "program": "${workspaceFolder}/tests/stress/stress_8k/2_seeds_8k.py",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": true
@@ -63,7 +63,7 @@
             "name": "8k ③ 상부 허용하중 여유 0% vs 10% (약 15분)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/stress_8k/3_margin_compare.py",
+            "program": "${workspaceFolder}/tests/stress/stress_8k/3_margin_compare.py",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": true
@@ -72,7 +72,7 @@
             "name": "8k ③ 여유 비교 빠르게 (하루 1,001건 · 1~2분)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/stress_8k/3_margin_compare.py",
+            "program": "${workspaceFolder}/tests/stress/stress_8k/3_margin_compare.py",
             "args": ["--quick"],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
@@ -82,7 +82,7 @@
             "name": "⑤ 과적 · 적재 대량 테스트 (10,000건 · 약 30분)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/stress_8k/5_packing_stress.py",
+            "program": "${workspaceFolder}/tests/stress/stress_8k/5_packing_stress.py",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": true
@@ -91,7 +91,7 @@
             "name": "⑤ 과적 · 적재 빠르게 (500건 · 1~2분)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/stress_8k/5_packing_stress.py",
+            "program": "${workspaceFolder}/tests/stress/stress_8k/5_packing_stress.py",
             "args": ["--quick"],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
@@ -101,7 +101,7 @@
             "name": "8k ④ 결과 보기 (실행 없음)",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/stress_8k/4_show_results.py",
+            "program": "${workspaceFolder}/tests/stress/stress_8k/4_show_results.py",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": true

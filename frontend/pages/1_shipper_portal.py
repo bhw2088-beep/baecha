@@ -503,7 +503,8 @@ def _df_to_items(df: pd.DataFrame) -> tuple[list[dict], list[str]]:
 
 
 def _hash(obj) -> str:
-    return hashlib.md5(json.dumps(obj, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return hashlib.md5(json.dumps(obj, sort_keys=True, ensure_ascii=False).encode(),   # 화면 캐시 키 (보안 아님)
+                       usedforsecurity=False).hexdigest()
 
 
 # ======================================================================= page

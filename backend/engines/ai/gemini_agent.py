@@ -230,14 +230,16 @@ def control_tower(store, settings, command: str, history: list[dict] | None = No
 
 
 def ask(store, settings, text: str) -> dict:
-    """관제 자연어 명령. Gemini 응답 텍스트 + (있으면) 적용된 설정 변경. 실패하면 규칙 기반 결과."""
+    """관제 자연어 명령. Gemini 응답 텍스트 + (있으면) 적용 대기 설정 변경.
+    스레드에서 불리므로 저장소를 바꾸지 않는다: 실패하면 rule_fallback 표시만 돌려주고, 규칙 기반 명령
+    (설정을 바꿀 수 있음)은 호출한 쪽이 이벤트 루프에서 실행한다 (api/endpoints/tracking.py agent_ask)."""
     if not available(settings):
-        return {**rule_agent.handle_command(store, text), "fallback": "GEMINI_API_KEY 없음 → 규칙 기반"}
+        return {"rule_fallback": True, "fallback": "GEMINI_API_KEY 없음 → 규칙 기반"}
     pending: list[dict] = []
     try:
         answer = _generate(settings, text, _tools(store, pending))
     except Exception as e:  # noqa: BLE001 — 키 오류 · 네트워크 · 할당량 → 규칙 기반
-        return {**rule_agent.handle_command(store, text), "fallback": f"Gemini 호출 실패 ({type(e).__name__})"}
+        return {"rule_fallback": True, "fallback": f"Gemini 호출 실패 ({type(e).__name__})"}
     return {"engine": f"Gemini {settings.gemini_model}", "answer": answer or "(빈 응답)", "pending": pending}
 
 
@@ -256,7 +258,8 @@ def incident_report(store, settings, anomaly_id: str) -> dict:
     if not base["ok"] or not available(settings):
         return {**base, "fallback": None if available(settings) else "GEMINI_API_KEY 없음 → 규칙 기반"}
     prompt = ("다음 이상 감지 건에 대한 관제 인시던트 리포트를 작성해라. 형식: 상황 요약 2줄, 추정 원인, "
-              "액션 아이템(번호 목록 3~5개), 화주 안내 문구 1개. 근거 데이터:\n" + base["text"])
+              "액션 아이템(번호 목록 3~5개), 화주 안내 문구 1개. 근거 데이터:\n" + _mask(base["text"]))
+    # ↑ 외부 AI 로는 기사 전화번호를 가려서 보낸다 (관리자 화면의 규칙 기반 리포트에는 연락처 그대로)
     try:
         text = _generate(settings, prompt, _tools(store, []))
     except Exception as e:  # noqa: BLE001

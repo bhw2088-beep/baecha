@@ -7,7 +7,7 @@
 - 상자끼리 겹치지 않고 적재함 밖으로 나가지 않는지 (좌표 직접 검사)
 """
 
-from _check import check, finish, section
+from _common import check, finish, section
 
 from backend.engines.packer.engine import Options
 from backend.engines.packer.models import ItemSpec

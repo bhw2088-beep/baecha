@@ -1,0 +1,28 @@
+# Ruff 정적 분석 설정 (CI: .github/workflows/ci.yml 의 lint-test 단계 · 로컬: python -m ruff check .)
+# 버그 · 보안 규칙만 본다 (스타일은 강제하지 않음). 제외한 규칙은 아래 이유 참고.
+target-version = "py312"
+extend-exclude = ["tests/stress/stress_8k", "docs", "deploy", "mobile_web"]
+
+[lint]
+select = [
+    "E4", "E7", "E9",   # import 위치 · 문장 오류 · 문법 오류
+    "F",                # 정의 안 된 이름 · 미사용 import/변수 (pyflakes)
+    "B",                # 흔한 버그 패턴 (flake8-bugbear)
+    "ASYNC",            # async 함수 안의 블로킹 호출 (이벤트 루프 멈춤)
+    "S",                # 보안 (Bandit 규칙)
+]
+ignore = [
+    "E741",   # 변수 이름 l (길이 · 너비 표기) — 가독성 취향
+    "B008",   # FastAPI Depends()/File() 기본값 — FastAPI 표준 방식
+    "B904",   # except 안 raise ... from — API 오류 변환에서 원인 체인 불필요
+    "B905",   # zip(strict=) — 길이가 같은 목록끼리만 묶음
+    "S101",   # assert — 테이블 등록 확인 · 테스트
+    "S105", "S106",  # 하드코딩 비밀번호 — 시연 계정 · 테스트 값 (운영 계정은 별도 검토)
+    "S110",   # try/except/pass — Redis 장애 시 바로 처리하려고 의도적으로 넘김
+    "S311",   # random — 시뮬레이션 · 가상 데이터용 (토큰 · 솔트는 secrets 사용)
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S"]          # 테스트: subprocess · /tmp · 테스트 비밀번호
+"tools/*" = ["S603", "S607"]
+"simulator/*" = ["S603", "S607"]

@@ -17,15 +17,15 @@ Phase 6: 마이크로 배치 매칭 스트레스 테스트 + GPS 디바운싱 �
      적재 오탐 0% · GPS 오알람 < 5% — GET /admin/kpi 와 같은 잣대
 
 실행: 수정본 폴더에서
-    python tests/stress_test.py                    # 기본 (주문 120 · 기사 45)
-    python tests/stress_test.py --quick            # CI 용 (주문 30 · 기사 18)
-    python tests/stress_test.py --out docs/설명/benchmark_metrics.json
+    python tests/stress/stress_test.py                    # 기본 (주문 120 · 기사 45)
+    python tests/stress/stress_test.py --quick            # CI 용 (주문 30 · 기사 18)
+    python tests/stress/stress_test.py --out docs/설명/benchmark_metrics.json
     # 대규모 단발 배치 (한 줄): 8일 × 하루 1,001건 = 8,008건 · 기사 400명 · 30분 시간 제한
     #   → 관제 KPI(매칭 · 적재)의 측정 기준 (backend/data/benchmark_large.json 사본을 /admin/kpi 가 읽음)
-    python tests/stress_test.py --preset 8k          # 결과: stress_8k/results/benchmark_large.json · large_run/*.csv
+    python tests/stress/stress_test.py --preset 8k          # 결과: tests/stress/stress_8k/results/benchmark_large.json · large_run/*.csv
     # 직접 지정: 5일 × 하루 1,000건 · 기사 300명 · 8건씩 배정 · 5,000건이나 15분이 되면 멈추고 집계
-    python tests/stress_test.py --days 5 --orders 1000 --drivers 300 --batch 8 --target 5000 --max-minutes 15 \
-        --expire-hours 3 --detail --out stress_8k/results/benchmark_large.json --csv-dir stress_8k/results/large_run
+    python tests/stress/stress_test.py --days 5 --orders 1000 --drivers 300 --batch 8 --target 5000 --max-minutes 15 \
+        --expire-hours 3 --detail --out tests/stress/stress_8k/results/benchmark_large.json --csv-dir tests/stress/stress_8k/results/large_run
       → backend/data/benchmark_metrics.json 에도 같은 내용을 저장 (GET /admin/kpi 가 GPS 오알람률을 읽음)
 결과: '결과: N개 통과 · 0개 실패' + 메트릭 JSON
 """
@@ -42,9 +42,9 @@ import sys
 import time
 from datetime import datetime, timedelta
 
-from _check import check, finish, section
+from _common import check, finish, section
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # 수정본
 sys.path.insert(0, ROOT)
 
 from backend.core.database import Store  # noqa: E402
@@ -85,8 +85,8 @@ if args.preset:
     for k, v in PRESETS[args.preset].items():
         setattr(args, k, v)
     args.detail = True
-    args.out = args.out or "stress_8k/results/benchmark_large.json"
-    args.csv_dir = args.csv_dir or "stress_8k/results/large_run"
+    args.out = args.out or "tests/stress/stress_8k/results/benchmark_large.json"
+    args.csv_dir = args.csv_dir or "tests/stress/stress_8k/results/large_run"
 if args.quick:
     args.orders, args.drivers = 30, 18
 rng = random.Random(args.seed)

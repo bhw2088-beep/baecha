@@ -70,7 +70,7 @@ def snapshot(since: float | None = None) -> dict:
     sv = [s for s in saves if since is None or s["t"] >= since]
     ev = [e for e in events if since is None or e["t"] >= since]
     ms = sorted(s["ms"] for s in sv)
-    p = (lambda q: ms[min(len(ms) - 1, int(round(q * (len(ms) - 1))))] if ms else None)
+    p = (lambda q: ms[min(len(ms) - 1, int(round(q * (len(ms) - 1))))] if ms else None)  # noqa: E731
     return {
         "saves": {"count": len(sv), "avg_ms": round(sum(ms) / len(ms), 1) if ms else None, "p95_ms": p(0.95),
                   "max_ms": ms[-1] if ms else None},

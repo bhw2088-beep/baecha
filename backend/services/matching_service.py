@@ -76,7 +76,7 @@ class MatchingMixin:
         changes = []
         for k, (label, unit) in SETTING_LABEL.items():
             if new[k] != self.settings[k]:
-                fmt = (lambda v: f"{v * 100:.0f}%") if k == "w_dist" else (lambda v: f"{v}{unit}")
+                fmt = (lambda v: f"{v * 100:.0f}%") if k == "w_dist" else (lambda v: f"{v}{unit}")  # noqa: B023 — 같은 반복에서 바로 씀
                 changes.append(f"{label} {fmt(self.settings[k])} → {fmt(new[k])}")
         if not changes:
             return self.settings_view()
@@ -433,7 +433,7 @@ class MatchingMixin:
     PACKING_BENCHMARK_FILE = os.path.join(os.path.dirname(BENCHMARK_FILE), "benchmark_packing.json")
 
     def _packing_benchmark(self) -> tuple[dict | None, dict | None]:
-        """적재 전용 대량 스트레스 테스트 사본 (tests/packing_stress.py · 무작위 화물 10,000건) → (전체, 현재 여유값 결과).
+        """적재 전용 대량 스트레스 테스트 사본 (tests/stress/packing_stress.py · 무작위 화물 10,000건) → (전체, 현재 여유값 결과).
         적재 · 과적 KPI 의 측정 기준 — 지금 설정된 상부 허용하중 여유(top_load_margin)와 같은 값으로 잰 결과를 쓴다."""
         try:
             with open(self.PACKING_BENCHMARK_FILE, encoding="utf-8") as f:

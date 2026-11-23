@@ -6,7 +6,7 @@ VS Code: 이 파일을 열고 오른쪽 위 ▷ (Run Python File) 를 누르면 
     그 대가(적재율 · 매칭률 · 거절률 · 공차 단축률 · 배차 지연)를 나란히 비교
   - KPI 기준 결과(results/benchmark_large.json)는 건드리지 않음
   - 결과: results/margin_compare/margin_00.json · margin_10.json · summary.md
-  - 빠르게 확인만: python stress_8k/3_margin_compare.py --quick   (하루 1,001건 · 1~2분)
+  - 빠르게 확인만: python tests/stress/stress_8k/3_margin_compare.py --quick   (하루 1,001건 · 1~2분)
   - 실행이 성공하면 비교표가 이 파일 맨 아래 ''' ''' 블록에 자동으로 저장된다 (문자열이라 실행되지 않음)
 """
 

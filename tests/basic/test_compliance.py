@@ -1,5 +1,5 @@
 """
-가입 컴플라이언스 점검 (서버 없이).   실행: 수정본 폴더에서  python tests/test_compliance.py
+가입 컴플라이언스 점검 (서버 없이).   실행: 수정본 폴더에서  python tests/basic/test_compliance.py
 
 - 사업자번호 Modulus-10: 정상 번호 셋 통과 · 가짜/검증 숫자 오류 · 형식 오류 · 모의 휴업/폐업 실패
 - 번호판 plate_type: 사업용(노란색 바 · 사 · 아 · 자 · 배) / 자가용 / 렌터카 / 형식 오류
@@ -8,7 +8,7 @@
 - 매칭 하드 필터: 자가용 번호판(D-008) · 블랙리스트(D-004) 기사는 후보 제외
 """
 
-from _check import check, finish, section
+from _common import check, finish, section
 
 from backend.core.database import Store
 from backend.core.errors import ApiError

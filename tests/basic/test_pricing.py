@@ -1,5 +1,5 @@
 """
-운임 · 수급 · 적재 안전 규칙 점검 (서버 없이).   실행: 수정본 폴더에서  python tests/test_pricing.py
+운임 · 수급 · 적재 안전 규칙 점검 (서버 없이).   실행: 수정본 폴더에서  python tests/basic/test_pricing.py
 
 - 모의 기상: 확률 분포(맑음 · 비 · 폭설), 같은 권역 · 시간대 재현성, 할증 배율 비 15% · 폭설 30%
 - 수급 D/S: 러시아워 포아송 수요 폭증, 1.5 초과 시 서지 발동 · 상한 30%
@@ -11,7 +11,7 @@
 import random
 from datetime import datetime
 
-from _check import check, finish, section
+from _common import check, finish, section
 
 from backend.engines import pricing_engine as pe
 from backend.engines import validation_engine as ve

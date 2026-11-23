@@ -4,7 +4,7 @@ Redis 장애 복구 테스트 — 워커가 죽은 뒤 메시지 · 작업이 �
 VS Code: 이 파일을 열고 오른쪽 위 ▷ (Run Python File) 를 누르면 바로 실행된다.
   - 테스트 전용 Redis 컨테이너와 네트워크를 따로 만들어 쓰고 끝나면 지운다 → 데모 스택 · 데이터는 건드리지 않음
   - 도커 이미지(baecha-app:dev) · redis:7.4-alpine 필요 → Docker Desktop 이 켜져 있어야 함
-터미널: 수정본 폴더에서  python tests/redis_recovery_test.py
+터미널: 수정본 폴더에서  python tests/checks_6/2_redis_recovery.py
 
 점검 내용
   A. GPS 스트림 (Redis Streams · gps_stream_worker)
@@ -31,7 +31,7 @@ import time
 import uuid
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]   # 수정본
 IMAGE = "baecha-app:dev"
 REDIS_IMAGE = "redis:7.4-alpine"
 NET = "baecha-recovery-test"
@@ -63,7 +63,7 @@ def host_main() -> int:
             ["docker", "run", "--rm", "--network", NET,
              "-e", f"REDIS_URL=redis://{REDIS_NAME}:6379/0", "-e", f"CELERY_VISIBILITY_TIMEOUT={VISIBILITY}",
              "-e", "PYTHONPATH=/src", "-e", "BAECHA_DB=0", "-e", "PYTHONIOENCODING=utf-8",
-             "-v", f"{ROOT.as_posix()}:/src", "-w", "/src", IMAGE, "python", "tests/redis_recovery_test.py", "--inside"],
+             "-v", f"{ROOT.as_posix()}:/src", "-w", "/src", IMAGE, "python", "tests/checks_6/2_redis_recovery.py", "--inside"],
             env={**os.environ, "MSYS_NO_PATHCONV": "1"})
         return r.returncode
     finally:
@@ -169,7 +169,7 @@ def _children(pid: int) -> list[int]:
 
 def _start_worker(name: str) -> subprocess.Popen:
     return subprocess.Popen(
-        ["celery", "-A", "backend.workers.celery_app", "worker", "-Q", "test_recovery", "-I", "tests._celery_probe",
+        ["celery", "-A", "backend.workers.celery_app", "worker", "-Q", "test_recovery", "-I", "tests.checks_6._celery_probe",
          "-c", "1", "-n", f"{name}@%h", "-l", "error", "--without-gossip", "--without-mingle", "--without-heartbeat"],
         cwd="/src", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 

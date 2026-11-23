@@ -11,7 +11,7 @@ import sys
 import time
 
 import requests
-from _check import check, finish, section
+from _common import check, finish, section
 
 API = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000/api/v1"
 PW = "baecha1234"

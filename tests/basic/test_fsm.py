@@ -7,7 +7,7 @@
 - 모든 전이가 감사 로그에 남고, 청구 · 결제 · 환불은 '재무 변경' + 금액으로 기록
 """
 
-from _check import check, finish, section
+from _common import check, finish, section
 
 from backend.core.database import Store
 from backend.core.errors import ApiError

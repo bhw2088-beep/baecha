@@ -6,11 +6,11 @@ KPI 목표치 측정 (매칭 · 적재) — 주문 8,000건 이상 스트레스 
 
 직접 실행하지 않고 같은 폴더의 번호 붙은 파일(1_kpi_8k.py · 2_seeds_8k.py · 4_show_results.py)이 불러 쓴다.
 옵션을 직접 주려면 (수정본 폴더에서)
-    python stress_8k/1_kpi_8k.py --days 10 --orders 1000 --drivers 500   # 규모 직접 지정 (10,000건)
-    python stress_8k/2_seeds_8k.py --seeds 1 2 3 7 --parallel 2          # 시드 · 동시 실행 수 지정
-    python stress_8k/1_kpi_8k.py --local                                  # 도커 없이 로컬 파이썬 (requirements 설치된 경우)
+    python tests/stress/stress_8k/1_kpi_8k.py --days 10 --orders 1000 --drivers 500   # 규모 직접 지정 (10,000건)
+    python tests/stress/stress_8k/2_seeds_8k.py --seeds 1 2 3 7 --parallel 2          # 시드 · 동시 실행 수 지정
+    python tests/stress/stress_8k/1_kpi_8k.py --local                                  # 도커 없이 로컬 파이썬 (requirements 설치된 경우)
 
-결과 파일 (stress_8k/results/)
+결과 파일 (tests/stress/stress_8k/results/)
     benchmark_large.json · large_run/*.csv   시드 7 (KPI 기준, stress_test.py --preset 8k 와 같음)
     seeds/seed<N>.json                       다른 시드
     seeds/summary.md                         KPI 표 · 시드별 표 (보고서에 붙여 넣기용)
@@ -28,8 +28,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent                # stress_8k 폴더
-ROOT = HERE.parent                                      # 수정본 폴더 (도커에 /src 로 연결)
+HERE = Path(__file__).resolve().parent                # tests/stress/stress_8k 폴더
+ROOT = HERE.parents[2]                                      # 수정본 폴더 (도커에 /src 로 연결)
 RESULTS = HERE / "results"
 RUNS = RESULTS / "seeds"
 LOGS = RESULTS / "logs"
@@ -53,8 +53,8 @@ STATUS = {"pass": "달성", "warn": "근접", "fail": "미달", "none": "측정 
 # ---------------------------------------------------------------- 실행
 def _stress_args(seed: int, days: int, orders: int, drivers: int, out: str, csv_dir: str | None) -> list[str]:
     if seed == KPI_SEED and (days, orders, drivers) == (8, 1001, 400) and csv_dir:
-        return ["tests/stress_test.py", "--preset", "8k"]   # KPI 기준 실행 (관제 /admin/kpi 사본까지 갱신)
-    args = ["tests/stress_test.py", "--seed", str(seed), "--days", str(days), "--orders", str(orders),
+        return ["tests/stress/stress_test.py", "--preset", "8k"]   # KPI 기준 실행 (관제 /admin/kpi 사본까지 갱신)
+    args = ["tests/stress/stress_test.py", "--seed", str(seed), "--days", str(days), "--orders", str(orders),
             "--drivers", str(drivers), "--batch", "8", "--target", str(days * orders), "--max-minutes", "60",
             "--expire-hours", "3", "--detail", "--out", out]
     return args + (["--csv-dir", csv_dir] if csv_dir else [])
@@ -74,7 +74,7 @@ def run_one(seed: int, a, parallel: bool) -> tuple[int, Path | None, float]:
     is_kpi = seed == KPI_SEED
     out = RESULTS / "benchmark_large.json" if is_kpi else RUNS / f"seed{seed}.json"
     rel_out = out.relative_to(ROOT).as_posix()
-    csv_dir = "stress_8k/results/large_run" if is_kpi else None
+    csv_dir = "tests/stress/stress_8k/results/large_run" if is_kpi else None
     cmd = _command(_stress_args(seed, a.days, a.orders, a.drivers, rel_out, csv_dir), a.local, parallel)
     log = LOGS / f"seed{seed}.log"
     t0 = time.time()
@@ -200,7 +200,7 @@ def show(seeds: list[int] | None) -> int:
     global LAST_TEXT
     base = _load(RESULTS / "benchmark_large.json")
     if not base:
-        print("결과가 없습니다. 먼저 stress_8k/1_kpi_8k.py 를 실행하세요.")
+        print("결과가 없습니다. 먼저 tests/stress/stress_8k/1_kpi_8k.py 를 실행하세요.")
         return 1
     md = ["## KPI 목표치 측정 (매칭 · 적재)", "", *kpi_table(base), "", *detail_lines(base)]
     results = {KPI_SEED: base}

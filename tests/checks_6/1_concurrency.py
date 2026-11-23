@@ -6,7 +6,7 @@ VS Code: 이 파일을 열고 오른쪽 위 ▷ (Run Python File) 를 누르면 
     → 데모 스택(8000 · 8501) · 부하 테스트 스택(baecha-load)과 데이터 · 포트가 겹치지 않음
   - 백엔드는 지금 폴더의 코드를 읽기 전용으로 넣어서 실행 (이미지 다시 빌드 불필요)
   - 도커 이미지(baecha-app:dev) 필요 → Docker Desktop 이 켜져 있어야 함
-터미널: 수정본 폴더에서  python tests/concurrency_test.py
+터미널: 수정본 폴더에서  python tests/checks_6/1_concurrency.py
 
 점검 내용 (요청은 스레드 여러 개로 '같은 순간'에 보냄)
   0. 같은 기사 가입 요청을 5번 동시에                          → 계정 1개 (이후 테스트 기사 12명 가입 · 승인)
@@ -33,12 +33,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]   # 수정본
 IMAGE = "baecha-app:dev"
 PROJECT = "baecha-conc"
 NET = f"{PROJECT}_default"
 COMPOSE = ["docker", "compose", "-p", PROJECT, "-f", "scripts/docker-compose.loadtest.yml",
-           "-f", "tests/_concurrency_compose.yml"]
+           "-f", "tests/checks_6/_concurrency_compose.yml"]
 PW = "baecha1234"
 SHIPPER, ADMIN = "logistics@samsung.com", "admin.control@baecha.co.kr"
 
@@ -67,7 +67,7 @@ def host_main() -> int:
         r = subprocess.run(
             ["docker", "run", "--rm", "--network", NET, "-e", "PYTHONPATH=/src", "-e", "PYTHONIOENCODING=utf-8",
              "-v", f"{ROOT.as_posix()}:/src", "-w", "/src", IMAGE,
-             "python", "tests/concurrency_test.py", "--inside", "http://backend:8000/api/v1"],
+             "python", "tests/checks_6/1_concurrency.py", "--inside", "http://backend:8000/api/v1"],
             env={**os.environ, "MSYS_NO_PATHCONV": "1"})
         if r.returncode not in (0, 1):
             print(_run([*COMPOSE, "logs", "--tail", "60", "backend"]).stdout)

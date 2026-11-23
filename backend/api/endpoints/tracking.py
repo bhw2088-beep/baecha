@@ -51,10 +51,14 @@ async def complete_run(order_id: str, receiver: str = Form(...), photo: UploadFi
     meta = {"filename": photo.filename, "size": len(data), "content_type": photo.content_type,
             "sha256": hashlib.sha256(data).hexdigest()}
     res = store.complete_run(user["org_id"], order_id, receiver, photo=meta)
-    os.makedirs(POD_DIR, exist_ok=True)
-    with open(os.path.join(POD_DIR, f"{order_id}{ext}"), "wb") as f:  # 화주 · 관제가 볼 수 있게 보관
-        f.write(data)
+    await asyncio.to_thread(_save_pod, f"{order_id}{ext}", data)  # 화주 · 관제가 볼 수 있게 보관 (최대 5MB 쓰기는 스레드에서)
     return res
+
+
+def _save_pod(name: str, data: bytes) -> None:
+    os.makedirs(POD_DIR, exist_ok=True)
+    with open(os.path.join(POD_DIR, name), "wb") as f:
+        f.write(data)
 
 
 @router.get("/orders/{order_id}/pod/photo")
@@ -63,7 +67,7 @@ async def pod_photo(order_id: str, user: dict = Depends(current_user)):
     store.order_detail(order_id, user)  # 접근 권한 확인
     for ext in POD_TYPES.values():
         path = os.path.join(POD_DIR, f"{order_id}{ext}")
-        if os.path.exists(path):
+        if os.path.exists(path):  # noqa: ASYNC240 — 파일 존재 확인 1회 (수 µs) · 전송은 FileResponse 가 비동기로
             return FileResponse(path)
     raise ApiError(404, "보관된 인수증 사진이 없습니다 (시드 · 이전 데이터).")
 
@@ -243,6 +247,8 @@ async def agent_ask(body: AskIn):
     if not gemini_agent.available(settings):
         return {**rule_agent.handle_command(store, body.text), "fallback": "GEMINI_API_KEY 없음 → 규칙 기반"}
     res = await asyncio.to_thread(gemini_agent.ask, store, settings, body.text)  # 네트워크 대기는 스레드에서
+    if res.pop("rule_fallback", False):    # Gemini 실패 → 규칙 기반 명령은 여기(이벤트 루프)에서 실행 (설정을 바꿀 수 있음)
+        return {**rule_agent.handle_command(store, body.text), "fallback": res["fallback"]}
     res["applied"] = gemini_agent.apply_pending(store, res.pop("pending", []))
     return res
 
