@@ -21,10 +21,14 @@
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
   "postStartCommand": "docker compose up --build -d",
-  "forwardPorts": [8501, 8000],
+  "forwardPorts": [8501, 8502, 8503, 8000],
   "portsAttributes": {
-    "8501": {"label": "웹 화면 (화주 · 차주 · 관제)", "onAutoForward": "openBrowser"},
-    "8000": {"label": "API · 휴대폰 3D 가이드 (/m/)", "onAutoForward": "notify"}
+    "8501": {"label": "웹 화면 (화주 · 차주)", "onAutoForward": "openBrowser"},
+    "8502": {"label": "관제센터 (통합관제 전용)", "onAutoForward": "notify"},
+    "8503": {"label": "휴대폰 3D 적재 가이드", "onAutoForward": "notify"},
+    "8000": {"label": "API 문서 (/docs)", "onAutoForward": "silent"},
+    "5432": {"onAutoForward": "ignore"},
+    "6379": {"onAutoForward": "ignore"}
   },
   "customizations": {
     "vscode": {

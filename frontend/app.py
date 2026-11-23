@@ -91,6 +91,10 @@ def reset_dialog():
 
 session.flush()  # 로그인/로그아웃에 따른 쿠키 저장·삭제
 user = st.session_state.get("user")
+if user and auth.CONTROL_ONLY and user["role"] != "admin":  # 관제센터 전용 화면(8502)은 통합관제 계정만
+    for k in ("user", "token"):
+        st.session_state.pop(k, None)
+    user = None
 if not user:
     st.html('<style>[data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"]{display:none}</style>')
     # 로그인 전에는 어떤 주소(/dispatch 등)로 들어와도 로그인 화면을 보여준다 ("Page not found" 방지)

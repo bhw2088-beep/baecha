@@ -164,6 +164,51 @@ services:
       <<: *app-healthcheck
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3).status == 200 else 1)"]
 
+  frontend-control:
+    # 관제센터 전용 화면 (8502) — 주소 뒤에 ?mode=control 없이도 관제센터 로그인 · 통합관제 계정만
+    <<: *app
+    command: python -m streamlit run frontend/app.py --server.address 0.0.0.0 --server.port 8502 --server.headless true
+    environment:
+      TZ: Asia/Seoul
+      BAECHA_API_BASE: http://backend:8000/api/v1
+      BAECHA_LOGIN_MODE: control
+    ports:
+      - "8502:8502"
+    networks: [edge]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8502/_stcore/health', timeout=3).status == 200 else 1)"]
+
+  mobile:
+    # 차주용 휴대폰 3D 적재 가이드 전용 주소 (8503 → 백엔드 /m/ · /api) — 비루트 nginx
+    image: nginxinc/nginx-unprivileged:1.27-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - ./deploy/mobile_nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8503:8080"
+    networks: [edge]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128m
+    depends_on:
+      backend:
+        condition: service_healthy
+
   simulator:
     # 가상 기사 GPS 시뮬레이터 — 프로필 'sim' 일 때만 실행
     <<: *app

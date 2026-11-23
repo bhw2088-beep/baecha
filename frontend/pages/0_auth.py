@@ -3,7 +3,10 @@
 - 일반 로그인(/): 화주 · 차주 전용. 관제 계정으로 로그인하면 막고 관제센터 로그인을 안내한다.
 - 관제센터 로그인(/?mode=control): 통합관제 전용 화면. 링크 없이 주소로만 들어온다. 화주 · 차주 계정은 막는다.
 - 회원가입: 화주 · 차주만. 통합관제 계정은 가입 화면에서 만들지 않는다.
+- 관제센터 전용 포트(8502, 환경변수 BAECHA_LOGIN_MODE=control): 주소 뒤에 아무것도 붙이지 않아도 항상 관제센터 로그인.
 """
+
+import os
 
 import streamlit as st
 
@@ -16,11 +19,12 @@ SIGNUP_ROLES = ["shipper", "driver"]       # 통합관제 계정은 가입 화�
 GENERAL_ROLES = {"shipper", "driver"}       # 일반 로그인 화면에서 들어올 수 있는 계정
 CONTROL_ROLES = {"admin"}                    # 관제센터 로그인 화면에서 들어올 수 있는 계정
 DEMO_PASSWORD = "baecha1234"
+CONTROL_ONLY = os.getenv("BAECHA_LOGIN_MODE") == "control"  # 관제센터 전용 화면 (docker-compose 의 frontend-control · 8502)
 
 
 def is_control_login() -> bool:
-    """관제센터 전용 로그인 주소인가: http://localhost:8501/?mode=control"""
-    return st.query_params.get("mode") == "control"
+    """관제센터 로그인 화면인가: 관제 전용 포트(8502)이거나 http://localhost:8501/?mode=control"""
+    return CONTROL_ONLY or st.query_params.get("mode") == "control"
 
 
 def _login(email: str, password: str, allowed: set[str]):
@@ -178,7 +182,7 @@ def _control_screen(meta):
                     _login(acc["email"], DEMO_PASSWORD, CONTROL_ROLES)
 
         st.caption("통합관제 계정은 관제센터에서 발급합니다 (회원가입으로 만들 수 없음).")
-        if st.button("← 화주 · 차주 로그인"):
+        if not CONTROL_ONLY and st.button("← 화주 · 차주 로그인"):  # 관제 전용 포트에서는 숨김
             del st.query_params["mode"]
             st.rerun()
 

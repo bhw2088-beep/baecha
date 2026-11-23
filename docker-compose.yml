@@ -123,6 +123,33 @@ services:
       - backend
       - redis
 
+  frontend-control:
+    # 관제센터 전용 화면: 주소 뒤에 ?mode=control 없이도 항상 관제센터 로그인 (통합관제 계정만)
+    <<: *app
+    build: .
+    command: python -m streamlit run frontend/app.py --server.address 0.0.0.0 --server.port 8502
+    environment:
+      TZ: Asia/Seoul
+      BAECHA_API_BASE: http://backend:8000/api/v1
+      BAECHA_LOGIN_MODE: control
+    ports:
+      - "8502:8502"
+    depends_on:
+      - backend
+
+  mobile:
+    # 차주용 휴대폰 3D 적재 가이드 전용 주소 (/m/ 없이 바로) — 백엔드 /m/ · /api 를 그대로 전달
+    image: nginxinc/nginx-unprivileged:1.27-alpine   # root 가 아닌 계정으로 도는 nginx
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./deploy/mobile_nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8503:8080"
+    depends_on:
+      - backend
+
 volumes:
   pgdata:          # 이름 유지: 바꾸면 기존 개발 DB 가 빈 DB 처럼 보인다
   pod_photos:

@@ -10,12 +10,14 @@ Streamlit 은 새로고침하면 세션(st.session_state)이 새로 만들어져
 """
 
 import json
+import os
 
 import streamlit as st
 
 import api
 
-COOKIE = "ct_token"
+# 관제센터 전용 화면(8502)은 쿠키 이름을 따로 써서, 같은 PC 의 8501(화주 · 차주) 로그인과 섞이지 않게 한다
+COOKIE = "ct_token_control" if os.getenv("BAECHA_LOGIN_MODE") == "control" else "ct_token"
 MAX_AGE = 60 * 60 * 12  # 12시간
 
 
