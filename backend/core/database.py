@@ -245,6 +245,7 @@ class DbSync:
             store.drivers = {r.id: _dec(r.data) for r in s.scalars(select(DriverRow))}
             store.tokens = {r.token: r.email for r in s.scalars(select(AuthTokenRow))}
             store.orders = {r.id: _dec(r.data) for r in s.scalars(select(OrderRow).order_by(OrderRow.created_at))}
+            store._idem_index = None   # 불러온 화물로 등록 중복 방지 색인을 다시 만들게
             store.anomalies = {r.id: _dec(r.data) for r in s.scalars(select(AnomalyRow))}
             store.audit = [_dec(r.data) for r in s.scalars(select(AuditRow).order_by(AuditRow.id))]
             store.reviews = {r.id: _dec(r.data) for r in s.scalars(select(ReviewRow))}
@@ -341,6 +342,7 @@ class Store(AuthMixin, OrderMixin, MatchingMixin, BillingMixin, ReviewMixin, Tra
     # ------------------------------------------------------------------ setup
     def reset(self):
         now = datetime.now()
+        self._idem_index = None   # 화물 등록 중복 방지 색인 (화물이 바뀌면 다시 만든다)
         self.started_at = now
         self.last_tick = now
         self.rng = random.Random(7)

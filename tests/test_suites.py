@@ -1,5 +1,5 @@
 """
-pytest 진입점: 점검 스크립트(test_packing · test_matching · test_fsm · test_compliance · test_pricing ·
+pytest 진입점: 점검 스크립트(test_packing · test_packing_rules · test_matching · test_matching_ai · test_fsm · test_compliance · test_pricing ·
 test_tracking · stress_test --quick · smoke_test)를 각각 실행해
 '결과: N개 통과 · 0개 실패'(종료 코드 0)인지 확인한다.
 
@@ -24,7 +24,8 @@ def _run(script: str, *args: str) -> subprocess.CompletedProcess:
                           capture_output=True, text=True, encoding="utf-8", timeout=600)
 
 
-@pytest.mark.parametrize("script", ["test_packing.py", "test_matching.py", "test_fsm.py", "test_compliance.py",
+@pytest.mark.parametrize("script", ["test_packing.py", "test_packing_rules.py", "test_matching.py",
+                                    "test_matching_ai.py", "test_fsm.py", "test_compliance.py",
                                     "test_pricing.py", "test_tracking.py", "stress_test.py --quick"])
 def test_offline_suite(script):
     """서버 없이 도는 점검 (3D 적재 · 매칭/거리/운임 · FSM/감사 로그/모의 PG · 컴플라이언스 · 수급/안전율 ·

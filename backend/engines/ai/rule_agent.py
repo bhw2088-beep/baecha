@@ -7,7 +7,8 @@ LLM 처럼 자유 대화를 하지는 않지만, 항상 같은 기준으로 판�
 점검 규칙
   1. 매칭 실패      : 실패 원인 · AI 적정 운임 대비 운임 차이 · 가장 가까운 공차 거리 → 보조금 금액 / 반경 확대 제안
   2. 운행 이상      : 온도 이탈 · 장시간 정체 · 경로 이탈 → 기사 확인 요청 · 화주 안내 문구
-  3. 도착 지연 위험  : 지연 30분 이상 → 화주 ETA 재안내 문구
+  3. 도착 지연 위험  : 30분↑ 주의 · 60분↑ 긴급(도크 조정) · 120분↑ 긴급(대체 차량 검토)
+                      × 원인(멈춤 → 기사 통화 먼저 / 주행 중 → 교통 지연) → 화주 ETA 재안내 문구 + '화주 안내 완료' 버튼
   4. 응답 임박 제안  : 수락 제한시간 15초 이하 → 다음 순위 대비 안내
   5. 정산 지연      : 청구 후 3일 넘게 미승인 → 화주 승인 요청
   6. 가입 심사 대기  : 승인 대기 차주 → 서류 확인 요청
@@ -107,18 +108,49 @@ def rule_anomalies(store) -> list[dict]:
     return out
 
 
+# 도착 지연 단계: (기준 분, 심각도, 이름) — 단계가 오를 때마다 브리핑에 다시 올라온다 (안내 완료한 단계까지는 숨김)
+DELAY_TIERS = [(30, "MEDIUM", "지연"), (60, "HIGH", "심각 지연"), (120, "HIGH", "장기 지연")]
+
+
+def delay_tier(minutes: int | float | None) -> int:
+    """지연 분 → 단계 0(없음) · 1(30분↑) · 2(60분↑) · 3(120분↑)."""
+    return sum(1 for m, _, _ in DELAY_TIERS if (minutes or 0) >= m)
+
+
 def rule_delays(store) -> list[dict]:
+    """도착 지연: 지연 정도별 단계(30 · 60 · 120분) × 원인(멈춤 / 주행 중)별 권장 조치 + '화주 안내 완료' 버튼.
+    안내 완료를 누르면 그 단계까지는 다시 띄우지 않고, 지연이 다음 단계로 커지면 다시 올라온다."""
     out = []
     for o in store.orders.values():
-        if o["status"] != "IN_TRANSIT" or o["delay_minutes"] < 30:
+        tier = delay_tier(o["delay_minutes"])
+        if o["status"] != "IN_TRANSIT" or tier == 0 or o.get("delay_ack_tier", 0) >= tier:
             continue
         v = store.order_view(o)
-        out.append(_insight("MEDIUM", "도착 지연", f"{o['id']} {o['title']} — 약 {o['delay_minutes']}분 지연 예상",
-                            "예상 도착 시각을 화주에게 다시 안내하는 것을 권장합니다.",
-                            evidence=[f"진행률 {v['progress']:.0f}% · 속도 {v['speed']}km/h", f"도착 예정 {v['eta_clock']}"],
-                            message=(f"[배차의 민족] {v['shipper']} 담당자님, {o['id']} 화물이 교통 상황으로 약 "
-                                     f"{o['delay_minutes']}분 늦어져 {v['eta_clock']} 도착 예정입니다. 양해 부탁드립니다."),
-                            order_id=o["id"]))
+        mins = o["delay_minutes"]
+        _, sev, name = DELAY_TIERS[tier - 1]
+        stopped = (o.get("speed") or 0) == 0
+        stagnation = store._open_anomaly(o["id"], "STAGNATION")
+        if stopped:
+            cause = "차량 멈춤 (속도 0km/h)" + (" · 장시간 정체 알림 열림" if stagnation else "")
+            detail = ("차량이 멈춰 있어 지연이 커지고 있습니다. 먼저 기사 통화로 사고 · 고장 · 휴게 여부를 확인하고, "
+                      "확인한 도착 시각으로 화주에게 다시 안내하세요.")
+            reason = "현장 상황 확인 중으로"
+        else:
+            cause = f"주행 중 ({v['speed']}km/h) · 교통 지연 추정"
+            detail = "운행은 계속되고 있지만 계획보다 늦어지고 있습니다. 화주에게 새 도착 예정 시각을 다시 안내하세요."
+            reason = "교통 상황으로"
+        if tier >= 2:
+            detail += " 하차지에 도크 · 인수 담당자 대기 시간 조정을 요청하세요."
+        if tier >= 3:
+            detail += " 2시간 넘게 늦어지고 있어 대체 차량(환적) 투입을 검토하세요."
+        out.append(_insight(
+            sev, "도착 지연", f"{o['id']} {o['title']} — 약 {mins}분 지연 예상 ({name})", detail,
+            evidence=[f"지연 단계 {tier}/3 (30 · 60 · 120분)", f"원인 {cause}",
+                      f"진행률 {v['progress']:.0f}% · 도착 예정 {v['eta_clock']}"],
+            action={"type": "delay_ack", "label": "화주 안내 완료", "endpoint": f"/admin/orders/{o['id']}/delay-ack"},
+            message=(f"[배차의 민족] {v['shipper']} 담당자님, {o['id']} 화물이 {reason} 약 {mins}분 늦어져 "
+                     f"{v['eta_clock']} 도착 예정입니다. 양해 부탁드립니다."),
+            order_id=o["id"]))
     return out
 
 

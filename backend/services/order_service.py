@@ -254,8 +254,36 @@ class OrderMixin:
         rows.sort(key=lambda o: o["created_at"], reverse=True)
         return [self.order_view(o) for o in rows]
 
+    IDEM_TTL = timedelta(hours=24)   # 같은 등록 요청 키를 기억하는 시간
+
+    def idempotent_order(self, shipper_id: str, key: str | None, body_hash: str | None) -> dict | None:
+        """[중복 등록 방지] 같은 화주가 같은 Idempotency-Key 로 이미 등록한 화물이 있으면 그 화물을 돌려준다.
+        - 키가 같은데 내용(body_hash)이 다르면 409 (다른 화물을 같은 키로 보낸 실수)
+        - 키를 기억하는 시간은 24시간 · 키는 화물에 저장되므로 서버를 다시 켜도 유지된다."""
+        if not key:
+            return None
+        oid = self._idem_idx().get((shipper_id, key))
+        o = self.orders.get(oid) if oid else None
+        if not o or datetime.now() - o["created_at"] > self.IDEM_TTL:
+            return None
+        if body_hash and o["idem"].get("hash") and o["idem"]["hash"] != body_hash:
+            raise ApiError(409, "이미 처리된 등록 요청과 내용이 다릅니다. 화물 목록을 확인한 뒤 새로 등록해 주세요.")
+        return {**self.order_view(o), "idempotent_replay": True}
+
+    def _idem_idx(self) -> dict:
+        """(화주, 등록 요청 키) → 화물 ID 색인. 처음 쓸 때 저장된 화물에서 만든다 (재시작 후에도 유지 · 초기화 시 비움)."""
+        idx = getattr(self, "_idem_index", None)
+        if idx is None:
+            idx = self._idem_index = {(o["shipper_id"], o["idem"]["key"]): o["id"]
+                                      for o in self.orders.values() if o.get("idem")}
+        return idx
+
     def create_order(self, shipper_id: str, data: dict, packing: dict | None = None,
-                     items: list[dict] | None = None) -> dict:
+                     items: list[dict] | None = None, idem_key: str | None = None,
+                     idem_hash: str | None = None) -> dict:
+        # 중복 등록 방지: 확인과 등록 사이에 대기(await)가 없어서, 같은 키로 동시에 와도 한 건만 만들어진다
+        if (prev := self.idempotent_order(shipper_id, idem_key, idem_hash)) is not None:
+            return prev
         for field, label in (("origin", "상차지"), ("destination", "하차지")):
             if not geo.is_known(data[field]):
                 raise ApiError(400, f"{label} '{data[field]}' 의 위치를 찾을 수 없습니다. 지역 목록에서 선택해 주세요.")
@@ -275,6 +303,9 @@ class OrderMixin:
                 self.orders[oid]["pickup_at"] = o_pickup.astimezone().replace(tzinfo=None)
         o = self.orders[oid]
         o.pop("seed_match", None)
+        if idem_key:
+            o["idem"] = {"key": idem_key, "hash": idem_hash}
+            self._idem_idx()[(shipper_id, idem_key)] = oid
         if packing:
             # 적재 계획 저장 (EP 스냅샷/후보 비교는 등록 화면 전용이라 제외)
             o["packing"] = {k: packing[k] for k in ("truck", "placements", "metrics", "constraints",
@@ -581,6 +612,9 @@ class OrderMixin:
             o["speed"] = 78
         if o and a["type"] == "COLD":
             o["temp_now"] = o["temp_set"]
+        if o and a["type"] == "DELAY":   # 지연 알림을 닫으면 지금 단계까지는 브리핑에서 숨김 (다음 단계로 커지면 다시)
+            from ..engines.ai.rule_agent import delay_tier
+            o["delay_ack_tier"] = max(o.get("delay_ack_tier", 0), delay_tier(o["delay_minutes"]))
         if o and a["type"] == "DEVIATION":
             o["deviated"] = False
             st = self.tracking.get(o["id"])
@@ -590,3 +624,21 @@ class OrderMixin:
         audit_entry(self, o, "tracking", "resolve", a["type"], "RESOLVED", "관제",
                     note=f"{a['id']} {a['text']} 조치 완료", order_id=a["order_id"] or "-")
         return self.anomaly_view(a)
+
+    def ack_delay(self, order_id: str) -> dict:
+        """AI 관제 브리핑 '도착 지연' → [화주 안내 완료]: 지금 지연 단계까지는 브리핑에서 숨기고,
+        열려 있는 도착 지연 알림(DELAY)이 있으면 함께 조치 완료. 지연이 다음 단계(60 · 120분)로 커지면 다시 올라온다."""
+        from ..engines.ai.rule_agent import delay_tier
+        from ..engines.fsm.order_fsm import audit_entry
+        o = self._get_order(order_id)
+        tier = delay_tier(o["delay_minutes"])
+        if o["status"] != "IN_TRANSIT" or tier == 0:
+            raise ApiError(409, "운행 중인 지연 화물이 아닙니다.")
+        o["delay_ack_tier"] = max(o.get("delay_ack_tier", 0), tier)
+        a = self._open_anomaly(order_id, "DELAY")
+        if a:
+            self.resolve_anomaly(a["id"])
+        audit_entry(self, o, "tracking", "delay_ack", None, f"+{o['delay_minutes']}분", "관제",
+                    note=f"도착 지연 화주 안내 완료 (단계 {tier}/3)")
+        return {"order_id": order_id, "delay_minutes": o["delay_minutes"], "ack_tier": o["delay_ack_tier"],
+                "resolved_anomaly": a["id"] if a else None}

@@ -89,6 +89,12 @@ async def resolve(anomaly_id: str):
     return store.resolve_anomaly(anomaly_id)
 
 
+@router.post("/admin/orders/{order_id}/delay-ack", dependencies=[Admin])
+async def delay_ack(order_id: str):
+    """AI 관제 브리핑 '도착 지연' 조치: 화주에게 새 도착 시각을 안내했음을 기록 (그 지연 단계까지 브리핑에서 숨김)."""
+    return store.ack_delay(order_id)
+
+
 @router.post("/admin/reset", dependencies=[Admin])
 async def reset_demo():
     """[데모 데이터 초기화] DB 를 비우고 시드 데이터로 다시 채운다 (시연 전 · 테스트 후). 데모 계정 로그인은 유지."""

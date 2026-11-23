@@ -122,6 +122,10 @@ class EPPacker:
             self._commit(p)
             eps = self._update_eps(eps, p)
 
+        shift = self._recenter() if self.o.balance else (0, 0)
+        if shift != (0, 0):   # 단계별 화면의 EP 점도 같은 만큼 옮겨 결과 좌표와 맞춘다
+            snapshots = [[[x + shift[0], y + shift[1], z] for x, y, z in s] for s in snapshots]
+
         return {
             "placements": self.placed,
             "unplaced": unplaced,
@@ -129,6 +133,54 @@ class EPPacker:
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
             "sorted_ids": [b.uid for b in order],
         }
+
+    # ------------------------------------------------------------------ R10 전체 이동 (축중량 균형)
+    LON_LOW, LON_HIGH = 0.20, 0.65        # 전후 무게중심 통과 구간 (validation_engine.axle_balance 와 같음)
+    LON_TARGET_LOW, LON_TARGET_HIGH = 0.30, 0.55   # 구간 밖이면 여유를 두고 이 위치까지 옮긴다
+
+    def _recenter(self) -> tuple[int, int]:
+        """R10: 다 놓은 뒤 무게중심이 통과 구간 밖이면, 화물 전체를 한 덩어리로 평행 이동한다.
+        EP 는 운전석 쪽 왼쪽 구석부터 채워서, 폭을 다 채우지 않는 짐(예: 무거운 상자 1개)은 구석에 쏠린다
+        → 그대로면 R10 실패로 더 큰 차가 추천된다. 상자 사이의 상대 위치는 그대로라서
+        겹침 · 지지면 · 상부 하중 · 최상단 · 하차 순서(LIFO) 판정은 바뀌지 않고, 적재함 경계 안에서만 옮긴다.
+        좌우: 가운데로 · 전후: 20~65% 밖이면 30% / 55% 쪽으로. 판정이 좋아질 때만 적용. 반환: 옮긴 (x, y) mm."""
+        from ..validation_engine import axle_balance
+
+        if not self.placed:
+            return (0, 0)
+        rows = [{"x": p.x, "y": p.y, "length": p.dx, "width": p.dy, "weight_kg": p.box.weight} for p in self.placed]
+        before = axle_balance(rows, self.c.length, self.c.width, self.c.max_weight)
+        if before["status"] == "pass":
+            return (0, 0)
+        total = sum(r["weight_kg"] for r in rows) or 1.0
+        cx = sum((r["x"] + r["length"] / 2) * r["weight_kg"] for r in rows) / total
+        cy = sum((r["y"] + r["width"] / 2) * r["weight_kg"] for r in rows) / total
+        x_min = -min(p.x for p in self.placed)                 # 앞(운전석)으로 옮길 수 있는 최대 (음수)
+        x_max = self.c.length - max(p.x1 for p in self.placed)  # 뒤(뒷문)로 옮길 수 있는 최대
+        y_min = -min(p.y for p in self.placed)
+        y_max = self.c.width - max(p.y1 for p in self.placed)
+        lon = cx / self.c.length
+        want_x = 0.0
+        if lon < self.LON_LOW:
+            want_x = self.LON_TARGET_LOW * self.c.length - cx
+        elif lon > self.LON_HIGH:
+            want_x = self.LON_TARGET_HIGH * self.c.length - cx
+        sx = int(round(max(x_min, min(x_max, want_x))))
+        sy = int(round(max(y_min, min(y_max, self.c.width / 2 - cy))))
+        if (sx, sy) == (0, 0):
+            return (0, 0)
+        moved = [{**r, "x": r["x"] + sx, "y": r["y"] + sy} for r in rows]
+        after = axle_balance(moved, self.c.length, self.c.width, self.c.max_weight)
+        rank = {"pass": 0, "warn": 1, "fail": 2}
+        better = (rank[after["status"]], after["lateral"]) < (rank[before["status"]], before["lateral"])
+        if not better:
+            return (0, 0)
+        for p in self.placed:
+            p.x += sx
+            p.y += sy
+            if p.ep:
+                p.ep = (p.ep[0] + sx, p.ep[1] + sy, p.ep[2])
+        return (sx, sy)
 
     def _merit(self, p):
         x, y, z = p

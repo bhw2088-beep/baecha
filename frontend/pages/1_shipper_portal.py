@@ -11,6 +11,7 @@ import hashlib
 from datetime import datetime, time, timedelta
 import json
 import math
+import uuid
 
 import pandas as pd
 import streamlit as st
@@ -824,7 +825,10 @@ def _register_section(plan, stale, title, origin, destination, cold, temp_set, w
                 st.warning("① 운송 정보의 화물명, 상차지, 하차지를 입력해 주세요.")
                 return
             req = plan["req"]
-            created = ui.act(api.post, "/shipper/orders", {
+            # 중복 등록 방지 키: 이 등록 폼 하나에 하나 (버튼 두 번 · 응답 지연 후 다시 눌러도 서버가 한 건만 만든다)
+            # 'no_' 로 시작해서 등록에 성공하면 아래에서 다른 입력값과 함께 지워지고, 다음 화물은 새 키를 받는다
+            idem = st.session_state.setdefault("no_idem_key", uuid.uuid4().hex)
+            created = ui.act(api.post, "/shipper/orders", headers={"Idempotency-Key": idem}, json={
                 "title": title, "truck_type": truck_type, "origin": origin, "destination": destination,
                 "price": int(price), "urgent": urgent, "cold_chain": cold,
                 "temp_set": float(temp_set) if cold else None,

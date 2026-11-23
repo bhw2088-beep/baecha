@@ -47,7 +47,7 @@ EVENT_LABEL = {
     "unsettle": "정산 취소",
     # 관제 · 추적 이벤트 (화물 상태는 바꾸지 않고 기록만)
     "deviation": "경로 이탈 감지", "delay": "도착 지연 감지", "reoutsource": "불법 재위탁 의심",
-    "blacklist": "기사 이용 제한", "unblacklist": "기사 제한 해제", "resolve": "이상 감지 조치",
+    "blacklist": "기사 이용 제한", "unblacklist": "기사 제한 해제", "resolve": "이상 감지 조치", "delay_ack": "도착 지연 화주 안내",
     "approve": "가입 승인", "reject": "가입 반려", "payout": "기사 수익금 송금",
     "signup_pass": "가입 자동 검증 통과", "signup_reject": "가입 자동 검증 차단",
 }
