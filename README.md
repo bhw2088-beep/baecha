@@ -87,7 +87,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 1. **하드 필터** — PostGIS `ST_DWithin` 반경 + 관제 승인 + **사업용 노란 번호판** + **기사 톤수 ≥ 필수 최소 톤수** + 블랙리스트 제외
 2. **스코어링** — 기사 차량 기준 3D 적재 시뮬레이션(전량 적재 · 안전율 · 축중량 등 필수 제약) 통과 차량에 대해
    규칙 점수(거리 60% + 적재율 40%, 관제가 변경 가능) **70%** + `ml_ranker.py` LightGBM 수락 예측 **30%**
-   (피처: 거리 · 적재율 · 운임 · cf_score(권역 선호) · 기사 평점 · 러시아워 등 10개) → **lgb_score ≥ 0.75** 후보만 자동 제안
+   (피처: 거리 · 적재율 · 운임 · cf_score(권역 선호) · 기사 평점 · 러시아워 · 날씨 · 수급비 등 12개) → **lgb_score ≥ 0.75** 후보만 자동 제안
 3. **최적 배정** `hungarian.py` — 대기 화물 전체 × 빈 기사 전체를 헝가리안 알고리즘으로 1:1 배정
    → 배정된 기사에게 제안, 거절 · 시간 초과면 다시 배정 (Redis 분산 락 안에서 실행)
 
@@ -104,7 +104,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 |---|---|---|
 | 0 | 사업자 Mod-10 · 국세청 API(선택) · 노란 번호판 · 필수 서류 3종 · prod compose | `engines/compliance_engine.py`, `docker-compose.prod.yml` |
 | 1 | 안전율 90/95%(경고/차단) · 축중량(산안법 173조) · 필수 최소 톤수 · 날씨/수급 서지 · 포아송 주문 | `engines/validation_engine.py`, `engines/pricing_engine.py`, `simulator/virtual_shipper.py` |
-| 2 | 하드 필터 · cf_score · LightGBM 10피처 · 0.75 임계값 · 매칭 메트릭스 | `engines/matcher/cf_score.py`, `models/metrics.py` |
+| 2 | 하드 필터 · cf_score · LightGBM 12피처 · 0.75 임계값 · 매칭 메트릭스 | `engines/matcher/cf_score.py`, `models/metrics.py` |
 | 3 | GPS 핑 API · 재위탁 방지 · Shapely 이탈 3회 디바운싱 · 지연 감지 · 해시 체인 | `engines/tracking_engine.py`, `services/tracking_service.py`, `models/audit.py` |
 | 4 | 상호 리뷰(별점 · 태그) · 자동/수동 블랙리스트 | `services/review_service.py`, `models/review.py` |
 | 5 | Gemini Function Calling 관제 (키 없으면 규칙) · 인시던트 리포트 · 조절 가이드 | `engines/ai/gemini_agent.py`, `engines/ai/rule_agent.py` |
