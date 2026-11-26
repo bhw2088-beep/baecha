@@ -8,10 +8,10 @@
 
 | 전체 시연 영상 (8분 19초) | 관제센터 영상 (2분 37초) |
 |---|---|
-| [![전체 시연 영상 — 3D 적재 화면](docs/시연/thumb_시연.png)](docs/시연/배차의민족_시연.mp4) | [![관제센터 영상 — 전국 관제 지도](docs/시연/thumb_관제.png)](docs/시연/배차의민족_관제센터.mp4) |
+| [![전체 시연 영상 — 3D 적재 화면](docs/시연/thumb_시연.png)](https://bhw2088-beep.github.io/baecha/%EC%8B%9C%EC%97%B0/%EB%B0%B0%EC%B0%A8%EC%9D%98%EB%AF%BC%EC%A1%B1_%EC%8B%9C%EC%97%B0.mp4) | [![관제센터 영상 — 전국 관제 지도](docs/시연/thumb_관제.png)](https://bhw2088-beep.github.io/baecha/%EC%8B%9C%EC%97%B0/%EB%B0%B0%EC%B0%A8%EC%9D%98%EB%AF%BC%EC%A1%B1_%EA%B4%80%EC%A0%9C%EC%84%BC%ED%84%B0.mp4) |
 | 기사 가입 → 관제 승인 → 화주 가입 → 화물 등록(과적 차단 · 3D 적재 · AI 운임) → 배차 수락 · 적재 가이드 → 정산 → 관제 | 전국 관제 지도(실시간 GPS) · 이상 감지 · 매칭 분석 · 컴플라이언스 |
 
-이미지를 누르면 영상이 열립니다. 실제 앱 화면을 Playwright 로 자동 녹화했고, 데이터는 모두 가상입니다.
+이미지를 누르면 브라우저에서 영상이 바로 재생됩니다 (GitHub Pages). 실제 앱 화면을 Playwright 로 자동 녹화했고, 데이터는 모두 가상입니다.
 
 | 영역 | 핵심 구현 |
 |---|---|
