@@ -44,7 +44,7 @@ from backend.engines.packer.trucks import TRUCKS  # noqa: E402
 from backend.engines.pricing_engine import HOUR_PROFILE, RUSH_HOURS, poisson  # noqa: E402
 
 API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8000/api/v1")
-SHIPPER_EMAIL = os.getenv("SIM_SHIPPER_EMAIL", "logistics@samsung.com")   # core/seed.py 데모 화주
+SHIPPER_EMAIL = os.getenv("SIM_SHIPPER_EMAIL", "logistics@hanbit.example.com")   # core/seed.py 데모 화주
 SHIPPER_PASSWORD = os.getenv("SIM_SHIPPER_PASSWORD", "baecha1234")        # core/seed.py DEMO_PASSWORD
 
 TITLES = ["반도체 부품", "생활가전", "냉동 수산물", "의약품 콜드체인", "자동차 부품", "건축 자재", "음료 팔레트", "택배 간선"]

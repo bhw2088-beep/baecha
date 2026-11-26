@@ -39,7 +39,7 @@ meta = call("GET", "/meta")
 check("지역 드롭다운 목록", len(meta["regions"]) >= 40, f"{len(meta['regions'])}곳")
 check("매칭 설정 공개", "formula" in meta["matching"], meta["matching"]["formula"])
 
-shipper, driver, admin = (login(e) for e in ("logistics@samsung.com", "driver.kim@baecha.co.kr",
+shipper, driver, admin = (login(e) for e in ("logistics@hanbit.example.com", "driver.kim@baecha.co.kr",
                                               "admin.control@baecha.co.kr"))
 check("데모 계정 3개 로그인", all((shipper, driver, admin)))
 
@@ -147,14 +147,14 @@ if target:
     check("관제가 인수증 사진 확인", r.status_code == 200 and r.content == png)
     call("POST", f"/driver/completed/{target}/invoice", driver, json={"extra_fee": 10_000, "toll_fee": 5_000})
     owner = call("GET", f"/orders/{target}", admin)["shipper"]
-    if owner == "삼성물류":
+    if owner == "한빛물류":
         paid = call("POST", f"/shipper/history/{target}/approve-invoice", shipper)
         check("청구 → 화주 승인 → 정산 완료", paid["status"] == "SETTLED", f"{paid['total_fee']:,}원")
     else:
         check("청구서 발송", True, f"화주 {owner} (데모 화주 계정이 아니라 승인은 생략)")
 
-    review = call("POST", "/reviews", shipper if owner == "삼성물류" else driver, expect=201,
-                  json={"order_id": target, "stars": 5, "tags": ["시간 엄수"] if owner == "삼성물류" else ["상하차 신속"]})
+    review = call("POST", "/reviews", shipper if owner == "한빛물류" else driver, expect=201,
+                  json={"order_id": target, "stars": 5, "tags": ["시간 엄수"] if owner == "한빛물류" else ["상하차 신속"]})
     check("운송 완료 화물 상호 평가", review["stars"] == 5, review["id"])
 
 section("컴플라이언스 · 감사 로그")

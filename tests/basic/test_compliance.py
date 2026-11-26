@@ -21,9 +21,9 @@ for b in comp.SAMPLE_VALID:
 for b, code in comp.SAMPLE_INVALID.items():
     r = comp.mock_business_status(b)
     check(f"실패 {b} → {comp.STATUS_LABEL[code]}", not r["ok"] and r["status"] == code, r["label"])
-check("하이픈 · 공백 무시", comp.mock_validate_business_number(" 124-81-00998 "))
-check("검증 숫자 계산", comp.with_check_digit("124810099") == "1248100998")
-check("키 없으면 모의 판정", comp.verify_business("1248100998")["source"] == "mock")
+check("하이픈 · 공백 무시", comp.mock_validate_business_number(" 617-81-10004 "))
+check("검증 숫자 계산", comp.with_check_digit("617811000") == "6178110004")
+check("키 없으면 모의 판정", comp.verify_business("6178110004")["source"] == "mock")
 
 section("차량 번호판 plate_type")
 for plate, t in [("경기 88바 7712", "COMMERCIAL_YELLOW"), ("서울 87아 5521", "COMMERCIAL_YELLOW"),
@@ -50,7 +50,7 @@ def reg(**kw):
 
 for label, kw, msg in [
     ("검증 숫자 오류 사업자 거절", dict(email="a@x.com", biz_no="123-45-67890"), "Mod-10"),
-    ("폐업 사업자 거절", dict(email="b@x.com", biz_no="220-81-62517"), "폐업"),
+    ("폐업 사업자 거절", dict(email="b@x.com", biz_no="617-81-50006"), "폐업"),
     ("자가용 번호판 거절", dict(email="c@x.com", plate="경기 12가 3456"), "자가용"),
     ("서류 누락 거절", dict(email="d@x.com", documents=docs[:2]), "필수 서류"),
 ]:
@@ -61,7 +61,7 @@ for label, kw, msg in [
         check(label, msg in e.detail, e.detail)
 try:
     store.register(role="shipper", email="s@x.com", password="password1", name="담당", phone="", company="테스트물류",
-                   biz_no="101-81-45901", owner_name="홍길동", open_date="20200115")
+                   biz_no="617-81-40003", owner_name="홍길동", open_date="20200115")
     check("휴업 화주 거절", False)
 except ApiError as e:
     check("휴업 화주 거절", "휴업" in e.detail, e.detail)
@@ -89,7 +89,7 @@ def rejected(label: str, word: str, **kw):
 rejected("같은 이메일 → 거절", "이메일", **{**dict(role="driver", email="ok@x.com", password="password1", name="중복",
                                          phone="010-9999-0001")})
 try:
-    reg(email="dup1@x.com", phone="010", plate="경기 82바 5555", biz_no="124-81-00998")
+    reg(email="dup1@x.com", phone="010", plate="경기 82바 5555", biz_no="617-81-10004")
     check("같은 연락처(010) → 거절", False, "가입됨")
 except ApiError as e:
     check("같은 연락처(010) → 거절", e.status == 409 and "연락처" in e.detail, e.detail)
@@ -105,8 +105,8 @@ except ApiError as e:
     check("다른 차주와 같은 사업자번호 → 거절", e.status == 409 and "사업자등록번호" in e.detail, e.detail)
 rejected("차주 사업자번호로 화주 가입 → 거절", "차주로 등록된", role="shipper", email="dup4@x.com", password="password1",
          name="담당", phone="010-9999-0004", company="중복물류", biz_no="305-88-12340")
-s2 = store.register(role="shipper", email="staff2@x.com", password="password1", name="삼성물류 2팀", phone="010-9999-0005",
-                    company="삼성물류", biz_no="124-81-00998", owner_name="김삼성", open_date="19960101")
+s2 = store.register(role="shipper", email="staff2@x.com", password="password1", name="한빛물류 2팀", phone="010-9999-0005",
+                    company="한빛물류", biz_no="617-81-10004", owner_name="김한빛", open_date="19960101")
 check("같은 회사(화주) 사업자번호로 담당자 추가 가입 → 허용", s2["user"]["role"] == "shipper")
 
 section("화주 사업자 진위확인 (기업명 · 사업자번호 · 대표자명 · 개업일자 4개 일치)")

@@ -63,7 +63,7 @@ CONTAINERS = {"backend": f"{PROJECT}-backend-1", "db": f"{PROJECT}-db-1", "redis
 TIMEOUT = 30                                                   # 요청 하나를 기다리는 최대 시간(초)
 
 ADMIN_EMAIL = "admin.control@baecha.co.kr"      # 시드 데이터의 관제 계정 (테스트 스택에도 똑같이 생김)
-SHIPPER_EMAIL = "logistics@samsung.com"         # 시드 데이터의 화주 계정
+SHIPPER_EMAIL = "logistics@hanbit.example.com"         # 시드 데이터의 화주 계정
 DRIVER_PASSWORD = "loadtest-pass-1234"          # 이 시뮬레이터가 만드는 가상 기사들의 비밀번호 (테스트 스택 전용)
 
 # 대한민국 주요 물류 거점 → 그 주변 '지역 이름' (가입 · 주문 API 는 위경도가 아니라 지역 이름을 받는다)

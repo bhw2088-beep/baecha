@@ -40,7 +40,7 @@ NET = f"{PROJECT}_default"
 COMPOSE = ["docker", "compose", "-p", PROJECT, "-f", "scripts/docker-compose.loadtest.yml",
            "-f", "tests/checks_6/_concurrency_compose.yml"]
 PW = "baecha1234"
-SHIPPER, ADMIN = "logistics@samsung.com", "admin.control@baecha.co.kr"
+SHIPPER, ADMIN = "logistics@hanbit.example.com", "admin.control@baecha.co.kr"
 
 
 # ====================================================================== 바깥(이 PC): 테스트 스택 준비

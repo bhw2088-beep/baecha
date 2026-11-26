@@ -9,7 +9,7 @@ DB 를 붙이면 이 파일은 개발용 시드 스크립트로만 쓰면 된다
   - 오송 → 서울 의약품     : 반경 50km 안에 냉장 공차가 없어 '매칭 실패' → 관제 화면에 노출
   - 평택 → 원주 냉동식품   : 김철수가 이미 거절한 화물 → 후보 소진으로 '매칭 실패'
   - 인천항 · 대전 출발 화물 : 반경 밖이라 자동 제안은 없지만 김철수의 'AI 추천 리스트'에서 직접 수락 가능
-  - 삼성물류 운행 중 차량 12대 (기사 D-009~D-016 은 모두 운행 중 → 자동 매칭 후보에 걸리지 않음)
+  - 한빛물류 운행 중 차량 12대 (기사 D-009~D-016 은 모두 운행 중 → 자동 매칭 후보에 걸리지 않음)
 """
 
 from datetime import datetime, timedelta
@@ -18,9 +18,9 @@ DEMO_PASSWORD = "baecha1234"
 
 # 사업자번호는 모두 Mod-10 검증을 통과하는 번호 (engines/compliance_engine.py · 시연용 가상 번호)
 SHIPPERS = [
-    {"id": "S-001", "name": "삼성물류", "biz_no": "124-81-00998"},
-    {"id": "S-002", "name": "현대글로비스", "biz_no": "211-81-36000"},
-    {"id": "S-003", "name": "LG디스플레이", "biz_no": "107-81-46719"},
+    {"id": "S-001", "name": "한빛물류", "biz_no": "617-81-10004"},
+    {"id": "S-002", "name": "누리글로벌", "biz_no": "617-81-20007"},
+    {"id": "S-003", "name": "가온디스플레이", "biz_no": "617-81-30000"},
 ]
 
 # 차주(기사). location = 공차 대기 위치(주소 키워드)
@@ -64,7 +64,7 @@ DRIVERS = [
 ]
 
 USERS = [
-    {"email": "logistics@samsung.com", "role": "shipper", "name": "삼성물류 담당자", "phone": "010-1234-1234",
+    {"email": "logistics@hanbit.example.com", "role": "shipper", "name": "한빛물류 담당자", "phone": "010-1234-1234",
      "org_id": "S-001", "sub": "화물 배차 및 관제팀"},
     {"email": "driver.kim@baecha.co.kr", "role": "driver", "name": "김철수", "phone": "010-1234-1234",
      "org_id": "D-001", "sub": "11톤 냉동탑차 · 경기 88바 7712"},
@@ -115,7 +115,7 @@ def orders(now: datetime) -> list[dict]:
     배차 확정(assigned_at)은 등록 18~58초 뒤: 시스템 제안 1초 미만 + 기사 수락 (수락 제한 60초 안 · 제안 1회)."""
     m = lambda **kw: timedelta(**kw)  # noqa: E731
     return [
-        # ---- 진행중 화물 (삼성물류) ----  ※ 인덱스 0~2 는 아래 anomalies() 가 참조
+        # ---- 진행중 화물 (한빛물류) ----  ※ 인덱스 0~2 는 아래 anomalies() 가 참조
         dict(title="전자부품 11톤 (콜드체인)", truck_type="11톤 냉동탑차", cold_chain=True,
              origin="인천 연수구 송도동", destination="경북 구미시 공단동", price=680_000,
              shipper_id="S-001", driver_id="D-005", status="IN_TRANSIT",

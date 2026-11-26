@@ -28,7 +28,7 @@ docker compose up --build -d    # db · redis · backend · worker · simulator 
 | http://localhost:8503 | 차주용 휴대폰 3D 적재 가이드 (휴대폰: `http://<PC IP>:8503`) · 예전 주소 `:8000/m/` 도 그대로 |
 | http://localhost:8000/docs | API 문서 |
 
-데모 계정 (비밀번호 `baecha1234`): 화주 `logistics@samsung.com` · 차주 `driver.kim@baecha.co.kr` · 관제 `admin.control@baecha.co.kr`
+데모 계정 (비밀번호 `baecha1234`): 화주 `logistics@hanbit.example.com` · 차주 `driver.kim@baecha.co.kr` · 관제 `admin.control@baecha.co.kr`
 관제 계정은 **관제센터 전용 주소** http://localhost:8502 (또는 http://localhost:8501/?mode=control) 에서만 접속합니다 (일반 로그인 화면 · 회원가입에는 관제 메뉴 없음).
 VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/가이드/실행방법.md](docs/가이드/실행방법.md)** 를 보세요.
 적재 · 매칭 · 관제 핵심 코드와 측정값은 **[docs/설명/주요코드_설명.md](docs/설명/주요코드_설명.md)** 에 정리했습니다.
