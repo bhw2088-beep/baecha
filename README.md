@@ -45,6 +45,7 @@ VS Code + Docker 로 실행하는 단계별 방법과 문제 해결은 **[docs/�
 | 명세 | [컬럼명_리스트.md](docs/명세/컬럼명_리스트.md) | DB 테이블 · API 응답 필드 |
 | 설명 | [주요코드_설명.md](docs/설명/주요코드_설명.md) | 적재 · 매칭 · 관제 핵심 코드 |
 | 설명 | [벤치마킹_보고서.md](docs/설명/벤치마킹_보고서.md) | 아키텍처 · KPI 측정값 · 한계 |
+| 설명 | [발표후_개선사항.pdf](docs/설명/발표후_개선사항.pdf) | 발표 피드백 대응: Streamlit ↔ DB 연동 검증 (연결 · 조회 · 화면 반영 · GPS · 예외 처리) |
 | 테스트 결과 | [tests/stress/stress_8k/README.md](tests/stress/stress_8k/README.md) | 8,008건 스트레스 테스트 실행 · 결과 |
 
 ---
